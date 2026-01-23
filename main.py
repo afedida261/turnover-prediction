@@ -12,7 +12,10 @@ from src.data_loader import RealExcelDataLoader
 from src.models.classifiers import LogisticRegressionTurnover, RandomForestTurnover, XGBoostTurnover, EnsembleTurnover, AdaBoostTurnover
 from src.models.nn_model import NeuralNetTurnover
 from src.evaluator import Evaluator
+from src.models.nn_model import NeuralNetTurnover
+from src.evaluator import Evaluator
 from src.config import TARGET_COL, FEATURE_DESCRIPTIONS, ID_COLUMNS
+from src.analysis.fuzzy_importance import FuzzyFeatureImportance
 
 def get_feature_importance(model, feature_names, top_n=15):
     """Extract and format feature importance from model."""
@@ -150,8 +153,11 @@ def main():
         # Evaluate on Test set
         test_metrics = evaluator.evaluate(model, X_test, y_test)
         print(f"  [Test]       AUC: {test_metrics['AUC_ROC']:.4f}, F1: {test_metrics['F1_Score']:.4f}")
-        print(f"  Recall@Top20%: {test_metrics['Recall@Top20%']:.4f}")
-        print(f"  Requirement Met (>=70%): {'✓ YES' if test_metrics['Requirement_Met'] else '✗ NO'}")
+        print(f"  Recall@Top20%: {test_metrics['Recall@Top20%']:.4f} (Max: {test_metrics.get('Max_Recall@Top20%', 1.0):.4f})")
+        print(f"  Recall@Top50%: {test_metrics.get('Recall@Top50%', 0.0):.4f}")
+        print(f"  Precision@Top20%: {test_metrics.get('Precision@Top20%', 0.0):.4f}")
+        print(f"  Requirement Met: {'✓ YES' if test_metrics['Requirement_Met'] else '✗ NO'}")
+        print(f"    (Targets: Prec@20% >= 0.80, Recall@50% >= 0.85)")
         
         # Check for overfitting (validation vs test gap)
         auc_gap = abs(val_metrics['AUC_ROC'] - test_metrics['AUC_ROC'])
@@ -173,8 +179,55 @@ def main():
     print("\n[3] Feature Importance Analysis")
     print("-"*40)
     
+    # Initialize Fuzzy Feature Importance
+    fuzzy_analyzer = FuzzyFeatureImportance(X.columns.tolist())
+    
+    # Collect importance from all trained models for fuzzy analysis
+    print("\n  Computing Fuzzy Consensus Importance from trained models...")
+    for name, model in models.items():
+        try:
+            # We need to extract the raw importance dict first
+            # The get_feature_importance helper below returns a list of tuples, which is not what we want
+            # So we access the model method directly if possible
+            if hasattr(model, 'get_feature_importance'):
+                imp_dict = model.get_feature_importance()
+                # Ensure it's a dict
+                if isinstance(imp_dict, (list, np.ndarray)):
+                    imp_dict = dict(zip(X.columns.tolist(), imp_dict))
+                elif not isinstance(imp_dict, dict):
+                    # Handle other cases or skip
+                    continue
+                    
+                fuzzy_analyzer.add_model_importance(name, imp_dict)
+        except Exception as e:
+            print(f"    - Could not extract importance from {name}: {e}")
+
+    # Calculate Consensus
+    consensus_df = fuzzy_analyzer.calculate_consensus()
+    
+    if not consensus_df.empty:
+        print("\n  Top 15 Consensus Risk Drivers (Fuzzy Information Fusion):")
+        print("  " + "-"*85)
+        print(f"  {'Rank':<4} | {'Feature':<35} | {'Consensus Score':<15} | {'Interpretation':<15}")
+        print("  " + "-"*85)
+        
+        for i, row in enumerate(consensus_df.head(15).itertuples(), 1):
+            feat = row.Feature
+            score = row.Consensus_Score
+            
+            # Interpretation
+            if score >= 0.7: interpretation = "High Risk"
+            elif score >= 0.4: interpretation = "Medium Risk"
+            else: interpretation = "Low Risk"
+            
+            # Readable name
+            readable = FEATURE_DESCRIPTIONS.get(feat, feat)
+            if len(readable) > 32: readable = readable[:29] + "..."
+            
+            print(f"  {i:<4} | {readable:<35} | {score:<15.4f} | {interpretation:<15}")
+            
     if best_model is not None:
-        print(f"\nTop features from best model ({best_model_name}):")
+        print(f"\nTop features from best model ({best_model_name}) [Reference]:")
         importance = get_feature_importance(best_model, X.columns.tolist())
         
         if importance:
