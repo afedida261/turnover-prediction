@@ -9,10 +9,10 @@ from .base_model import BaseTurnoverModel
 
 class LogisticRegressionTurnover(BaseTurnoverModel):
     """Logistic Regression model - good for interpretability."""
-    def __init__(self, class_weight='balanced', max_iter=1000, **kwargs):
+    def __init__(self, class_weight='balanced', max_iter=1000, random_state=42, **kwargs):
         super().__init__()
         self.scaler = StandardScaler()
-        self.model = LogisticRegression(class_weight=class_weight, max_iter=max_iter, **kwargs)
+        self.model = LogisticRegression(class_weight=class_weight, max_iter=max_iter, random_state=random_state, **kwargs)
         self.feature_names = None
 
     def fit(self, X, y):
@@ -34,9 +34,9 @@ class LogisticRegressionTurnover(BaseTurnoverModel):
 
 
 class RandomForestTurnover(BaseTurnoverModel):
-    def __init__(self, n_estimators=100, class_weight='balanced', **kwargs):
+    def __init__(self, n_estimators=100, class_weight='balanced', random_state=42, **kwargs):
         super().__init__()
-        self.model = RandomForestClassifier(n_estimators=n_estimators, class_weight=class_weight, **kwargs)
+        self.model = RandomForestClassifier(n_estimators=n_estimators, class_weight=class_weight, random_state=random_state, **kwargs)
         self.feature_names = None
 
     def fit(self, X, y):
@@ -53,9 +53,9 @@ class RandomForestTurnover(BaseTurnoverModel):
         return self.model.feature_importances_
 
 class XGBoostTurnover(BaseTurnoverModel):
-    def __init__(self, scale_pos_weight=None, use_label_encoder=False, eval_metric='logloss', **kwargs):
+    def __init__(self, scale_pos_weight=None, use_label_encoder=False, eval_metric='logloss', random_state=42, **kwargs):
         super().__init__()
-        self.model = XGBClassifier(scale_pos_weight=scale_pos_weight, use_label_encoder=use_label_encoder, eval_metric=eval_metric, **kwargs)
+        self.model = XGBClassifier(scale_pos_weight=scale_pos_weight, use_label_encoder=use_label_encoder, eval_metric=eval_metric, random_state=random_state, **kwargs)
         self.feature_names = None
 
     def fit(self, X, y):
@@ -76,14 +76,15 @@ class XGBoostTurnover(BaseTurnoverModel):
 
 class AdaBoostTurnover(BaseTurnoverModel):
     """AdaBoost classifier - good for reducing bias and handling imbalanced data."""
-    def __init__(self, n_estimators=200, learning_rate=0.5, **kwargs):
+    def __init__(self, n_estimators=200, learning_rate=0.5, random_state=42, **kwargs):
         super().__init__()
         # Use a deeper decision tree as base estimator for better performance
-        base_estimator = DecisionTreeClassifier(max_depth=3, class_weight='balanced')
+        base_estimator = DecisionTreeClassifier(max_depth=3, class_weight='balanced', random_state=random_state)
         self.model = AdaBoostClassifier(
             estimator=base_estimator,
             n_estimators=n_estimators,
             learning_rate=learning_rate,
+            random_state=random_state,
             **kwargs
         )
         self.feature_names = None
@@ -104,13 +105,13 @@ class AdaBoostTurnover(BaseTurnoverModel):
 
 
 class EnsembleTurnover(BaseTurnoverModel):
-    def __init__(self, models=None):
+    def __init__(self, models=None, random_state=42):
         super().__init__()
         if models is None:
             self.estimators = [
-                ('rf', RandomForestClassifier(n_estimators=100, class_weight='balanced')),
-                ('xgb', XGBClassifier(use_label_encoder=False, eval_metric='logloss', scale_pos_weight=10)),
-                ('ada', AdaBoostClassifier(n_estimators=100, learning_rate=0.5))
+                ('rf', RandomForestClassifier(n_estimators=100, class_weight='balanced', random_state=random_state)),
+                ('xgb', XGBClassifier(use_label_encoder=False, eval_metric='logloss', scale_pos_weight=10, random_state=random_state)),
+                ('ada', AdaBoostClassifier(n_estimators=100, learning_rate=0.5, random_state=random_state))
             ]
         else:
             self.estimators = models

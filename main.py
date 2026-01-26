@@ -14,7 +14,7 @@ from src.models.nn_model import NeuralNetTurnover
 from src.evaluator import Evaluator
 from src.models.nn_model import NeuralNetTurnover
 from src.evaluator import Evaluator
-from src.config import TARGET_COL, FEATURE_DESCRIPTIONS, ID_COLUMNS
+from src.config import TARGET_COL, FEATURE_DESCRIPTIONS, ID_COLUMNS, set_seed
 from src.analysis.fuzzy_importance import FuzzyFeatureImportance
 
 def get_feature_importance(model, feature_names, top_n=15):
@@ -61,8 +61,14 @@ def main():
                         help="Path to the Excel data file")
     parser.add_argument('--output_path', type=str, default='predictions_output.xlsx',
                         help="Path for output predictions file")
+    parser.add_argument('--seed', type=int, default=42,
+                        help="Random seed for reproducibility")
     
     args = parser.parse_args()
+    
+    # Set seed for reproducibility
+    set_seed(args.seed)
+    print(f"Random seed set to: {args.seed}")
     
     # 1. Data Handling
     print("="*80)
@@ -98,10 +104,10 @@ def main():
     
     # Split into train/validation/test (60/20/20)
     X_temp, X_test, y_temp, y_test = train_test_split(
-        X, y, test_size=0.2, random_state=42, stratify=y
+        X, y, test_size=0.2, random_state=args.seed, stratify=y
     )
     X_train, X_val, y_train, y_val = train_test_split(
-        X_temp, y_temp, test_size=0.25, random_state=42, stratify=y_temp  # 0.25 of 0.8 = 0.2
+        X_temp, y_temp, test_size=0.25, random_state=args.seed, stratify=y_temp  # 0.25 of 0.8 = 0.2
     )
     
     print(f"\nData Split:")

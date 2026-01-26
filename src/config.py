@@ -1,4 +1,40 @@
 # Configuration for Real HR Data (first_file.xlsx)
+import os
+import numpy as np
+
+def set_seed(seed=42):
+    """
+    Set random seed for reproducibility across all libraries.
+    
+    Args:
+        seed (int): Random seed value (default: 42)
+    
+    Ensures consistent results from:
+    - NumPy random operations
+    - PyTorch random operations
+    - Scikit-learn models
+    - Built-in Python random module
+    """
+    np.random.seed(seed)
+    
+    # PyTorch seeds (if available)
+    try:
+        import torch
+        torch.manual_seed(seed)
+        torch.cuda.manual_seed(seed)
+        torch.cuda.manual_seed_all(seed)
+        # Ensure deterministic behavior in CUDA operations
+        torch.backends.cudnn.deterministic = True
+        torch.backends.cudnn.benchmark = False
+    except ImportError:
+        pass
+    
+    # Python built-in random
+    import random
+    random.seed(seed)
+    
+    # Scikit-learn uses numpy seeds, but explicit setting helps
+    os.environ['PYTHONHASHSEED'] = str(seed)
 
 # Column definitions for the real data
 TARGET_COL = 'leave_ind'  # 1 = left in last year, 0 = stayed

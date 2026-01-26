@@ -364,7 +364,7 @@ class RealExcelDataLoader(BaseDataLoader):
                 # Too many missing - drop column
                 print(f"  Dropping column '{col}' ({missing_pct:.1f}% missing)")
                 data.drop(columns=[col], inplace=True)
-            elif data[col].dtype in ['object']:
+            elif data[col].dtype in ['object'] or col == "TeurGroupHscm" or col == "Yishuv":
                 # Categorical - fill with mode or 'Unknown'
                 mode_val = data[col].mode()
                 if len(mode_val) > 0:
@@ -373,6 +373,7 @@ class RealExcelDataLoader(BaseDataLoader):
                     data[col] = data[col].fillna('Unknown')
             else:
                 # Numeric - fill with median
+                print(f"  Filling missing values in numeric column '{col}' with median")
                 data[col] = data[col].fillna(data[col].median())
         
         self.preprocessing_report['missing_values'] = missing_report
