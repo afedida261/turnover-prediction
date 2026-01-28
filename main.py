@@ -23,8 +23,23 @@ def get_feature_importance(model, feature_names, top_n=15):
         importance_dict = model.get_feature_importance()
         
         if isinstance(importance_dict, dict):
+            # Handle XGBoost's generic feature names (f0, f1, f2, etc.)
+            # Map them back to actual feature names
+            mapped_dict = {}
+            for key, value in importance_dict.items():
+                if key.startswith('f') and key[1:].isdigit():
+                    # This is a generic XGBoost feature name like "f0", "f1"
+                    idx = int(key[1:])
+                    if idx < len(feature_names):
+                        mapped_dict[feature_names[idx]] = value
+                    else:
+                        mapped_dict[key] = value
+                else:
+                    # Keep original key if it's not a generic name
+                    mapped_dict[key] = value
+            
             # Sort by importance value
-            sorted_importance = sorted(importance_dict.items(), key=lambda x: abs(x[1]), reverse=True)
+            sorted_importance = sorted(mapped_dict.items(), key=lambda x: abs(x[1]), reverse=True)
         else:
             # If array, convert to dict
             sorted_importance = sorted(zip(feature_names, importance_dict), key=lambda x: abs(x[1]), reverse=True)

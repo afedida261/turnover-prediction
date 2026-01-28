@@ -68,10 +68,20 @@ class XGBoostTurnover(BaseTurnoverModel):
 
     def get_feature_importance(self):
         try:
-            return self.model.get_booster().get_score(importance_type='weight')
+            importance_dict = self.model.get_booster().get_score(importance_type='gain')
+            # Normalize the importance scores
+            total = sum(importance_dict.values())
+            if total > 0:
+                importance_dict = {k: v / total for k, v in importance_dict.items()}
+            return importance_dict
         except:
              if self.feature_names is not None:
-                 return dict(zip(self.feature_names, self.model.feature_importances_))
+                 importances = self.model.feature_importances_
+                 # Normalize
+                 total = sum(importances)
+                 if total > 0:
+                     importances = importances / total
+                 return dict(zip(self.feature_names, importances))
              return self.model.feature_importances_
 
 class AdaBoostTurnover(BaseTurnoverModel):
