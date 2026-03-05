@@ -3,7 +3,7 @@ import pandas as pd
 import numpy as np
 from typing import Any, Tuple, List
 from sklearn.preprocessing import MinMaxScaler
-from config import (
+from src.config import (
     TARGET_COL, EXCLUDE_COLUMNS, NUMERIC_FEATURES, 
     CATEGORICAL_FEATURES, OUTLIER_IQR_MULTIPLIER, ID_COLUMNS,
     OUTPUT_COLUMN, FEATURE_DESCRIPTIONS
@@ -88,7 +88,7 @@ class RealExcelDataLoader(BaseDataLoader):
         print(f"Loaded {len(self.df)} records with {len(self.df.columns)} columns")
         return self.df
     
-    def preprocess(self, df: pd.DataFrame) -> pd.DataFrame:
+    def preprocess(self, df: pd.DataFrame, is_inference: bool = False) -> pd.DataFrame:
         """
         Comprehensive preprocessing for real HR data:
         1. Aggregate time-series data per employee
@@ -117,7 +117,7 @@ class RealExcelDataLoader(BaseDataLoader):
         data = self._feature_engineering(data)
         
         # 3. Handle Missing Values
-        data = self._handle_missing_values(data)
+        data = self._handle_missing_values(data, is_inference)
         
         # 4. Handle Outliers/Extreme Values
         data = self._handle_outliers(data)
@@ -130,10 +130,21 @@ class RealExcelDataLoader(BaseDataLoader):
         data.drop(columns=cols_to_drop, inplace=True, errors='ignore')
         
         # 7. Normalize numeric features (0-1 scaling)
-        data = self._normalize_features(data)
+        data = self._normalize_features(data, is_inference)
         
-        self.feature_names = [c for c in data.columns if c != TARGET_COL]
-        self.preprocessing_report['final_features'] = len(self.feature_names)
+        if is_inference and self.feature_names is not None:
+            # Align columns: add missing columns as 0, drop unexpected columns
+            for col in self.feature_names:
+                if col not in data.columns:
+                    data[col] = 0
+            
+            # For inference, keep only the fitted features
+            data = data[self.feature_names]
+            self.preprocessing_report['final_features'] = len(self.feature_names)
+        else:
+            self.feature_names = [c for c in data.columns if c != TARGET_COL]
+            self.preprocessing_report['final_features'] = len(self.feature_names)
+            
         self.preprocessing_report['final_rows'] = len(data)
         
         print(f"\nPreprocessing complete: {len(data)} records, {len(self.feature_names)} features")
@@ -314,7 +325,7 @@ class RealExcelDataLoader(BaseDataLoader):
         
         return data
     
-    def _normalize_features(self, data: pd.DataFrame) -> pd.DataFrame:
+    def _normalize_features(self, data: pd.DataFrame, is_inference: bool = False) -> pd.DataFrame:
         """
         Apply MinMax normalization (0-1 scaling) to all numeric features.
         This ensures all features are on the same scale for better model performance.
@@ -322,16 +333,23 @@ class RealExcelDataLoader(BaseDataLoader):
         # Identify numeric columns to scale (exclude target and already binary columns)
         numeric_cols = data.select_dtypes(include=[np.number]).columns.tolist()
         
-        # Exclude target and columns that are already 0-1 (binary flags)
-        binary_cols = [c for c in numeric_cols if data[c].nunique() <= 2]
-        cols_to_scale = [c for c in numeric_cols if c != TARGET_COL and c not in binary_cols]
-        
-        self.numeric_columns_to_scale = cols_to_scale
-        
-        if cols_to_scale:
-            # Fit and transform
-            data[cols_to_scale] = self.scaler.fit_transform(data[cols_to_scale])
-            print(f"[Preprocessing] Normalized {len(cols_to_scale)} numeric features to 0-1 scale")
+        if not is_inference:
+            # Exclude target and columns that are already 0-1 (binary flags)
+            binary_cols = [c for c in numeric_cols if data[c].nunique() <= 2]
+            cols_to_scale = [c for c in numeric_cols if c != TARGET_COL and c not in binary_cols]
+            self.numeric_columns_to_scale = cols_to_scale
+            
+            if cols_to_scale:
+                data[cols_to_scale] = self.scaler.fit_transform(data[cols_to_scale])
+                print(f"[Preprocessing] Fit and normalized {len(cols_to_scale)} numeric features to 0-1 scale")
+        else:
+            if hasattr(self.scaler, 'feature_names_in_'):
+                cols_to_scale = list(self.scaler.feature_names_in_)
+                for c in cols_to_scale:
+                    if c not in data.columns:
+                        data[c] = 0
+                data[cols_to_scale] = self.scaler.transform(data[cols_to_scale])
+                print(f"[Preprocessing] Transformed {len(cols_to_scale)} numeric features using existing scaler")
         
         return data
     
@@ -344,7 +362,7 @@ class RealExcelDataLoader(BaseDataLoader):
         """Return the fitted scaler for inverse transformations if needed."""
         return self.scaler
     
-    def _handle_missing_values(self, data: pd.DataFrame) -> pd.DataFrame:
+    def _handle_missing_values(self, data: pd.DataFrame, is_inference: bool = False) -> pd.DataFrame:
         """Handle missing values with appropriate strategies per column type."""
         missing_report = {}
         
@@ -360,7 +378,7 @@ class RealExcelDataLoader(BaseDataLoader):
                 continue
                 
             # Strategy based on missing percentage and column type
-            if missing_pct > 50:
+            if missing_pct > 50 and not is_inference:
                 # Too many missing - drop column
                 print(f"  Dropping column '{col}' ({missing_pct:.1f}% missing)")
                 data.drop(columns=[col], inplace=True)
@@ -373,8 +391,11 @@ class RealExcelDataLoader(BaseDataLoader):
                     data[col] = data[col].fillna('Unknown')
             else:
                 # Numeric - fill with median
-                print(f"  Filling missing values in numeric column '{col}' with median")
-                data[col] = data[col].fillna(data[col].median())
+                median_val = data[col].median()
+                if pd.isna(median_val):
+                    median_val = 0  # Fallback if entirely missing
+                print(f"  Filling missing values in numeric column '{col}' with {median_val}")
+                data[col] = data[col].fillna(median_val)
         
         self.preprocessing_report['missing_values'] = missing_report
         print(f"Handled missing values in {len(missing_cols)} columns")

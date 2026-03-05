@@ -8,3 +8,6 @@ openpyxl
 matplotlib
 seaborn
 jupyter
+streamlit
+plotly
+joblib

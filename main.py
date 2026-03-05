@@ -3,6 +3,7 @@ import os
 import argparse
 import pandas as pd
 import numpy as np
+import joblib
 from sklearn.model_selection import train_test_split
 
 # Add src to path
@@ -342,6 +343,16 @@ def main():
         risk_dist = output_df['Risk Category'].value_counts()
         for risk, count in risk_dist.items():
             print(f"    - {risk}: {count} ({count/len(output_df)*100:.1f}%)")
+
+        # Save model pipeline artifact
+        os.makedirs('artifacts', exist_ok=True)
+        pipeline = {
+            'model': best_model,
+            'scaler': loader.get_scaler(),
+            'feature_names': loader.get_feature_names()
+        }
+        joblib.dump(pipeline, 'artifacts/model_pipeline.pkl')
+        print(f"\n  Saved model pipeline artifact to artifacts/model_pipeline.pkl")
 
     # 8. Summary
     print("\n" + "="*80)
