@@ -39,3 +39,8 @@ turnover-prediction/
    ```bash
    python main.py
    ```
+
+3. **Run Interactive Dashboard:**
+   ```bash
+   streamlit run app.py
+   ```

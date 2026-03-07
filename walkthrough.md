@@ -97,4 +97,18 @@ The project uses specific metrics tailored for high-churn datasets:
     python main.py --data_path "path/to/your/file.xlsx"
     ```
 
+## 💻 Interactive Streamlit Dashboard
+The project includes a robust, visually immersive Streamlit application (`app.py`) providing organizational health insights through 3 primary zoom-levels:
+
+1. **Macro View (Company Level)**
+   - Displays completely aggregated company-wide turnover metrics.
+   - Includes real-time distributions of Risk Categories, At-Risk roles, and tenure scatterplots.
+2. **Meso View (Team/Department Level)**
+   - Allows zooming into specific hierarchical levels via the **Budget Section (Seif)** selector.
+   - Generates dynamically filtered KPIs and displays a targeted "Top 10 Highest Risk Employees" table for actionable management follow-up.
+3. **Micro View (Individual Employee)**
+   - Allows selecting any specific tracked employee by their ID.
+   - Evaluates the employee's exact real-time historical data against the integrated ML pipeline.
+   - **What-If Simulation Engine:** Provides draggable sliders to alter salary, workload, or sick days for that specific employee. Altering these parameters automatically re-runs localized machine learning inferences, outputting a side-by-side Gauge Chart comparison showing how operational changes quantitatively pull the employee's predicted risk score up or down.
+
 
