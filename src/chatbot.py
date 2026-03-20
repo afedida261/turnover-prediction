@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 import os
-import json
+import sqlite3
 from typing import Any, Optional
 
 import pandas as pd
 from dotenv import load_dotenv
-from openai.types.chat import ChatCompletionMessageToolCall
+from google import genai
+from google.genai import types
 
 load_dotenv()
 
@@ -37,7 +38,7 @@ You help HR managers and executives understand employee turnover risk across the
 """
 
 # ---------------------------------------------------------------------------
-# OpenAI Tool Schemas
+# Tool Schemas
 # ---------------------------------------------------------------------------
 TOOLS: list[dict[str, Any]] = [
     {
@@ -616,98 +617,122 @@ def chat(
     Returns:
         The assistant's response string.
     """
-    try:
-        from openai import OpenAI
-    except ImportError:
-        return "The `openai` package is not installed. Run `pip install openai` to enable the chatbot."
-
-    api_key = os.getenv("GEMINI_API_KEY")
+    api_key = os.getenv("GEMINI_API_KEY") or os.getenv("gimini_api_key") or os.getenv("GIMINI_API_KEY")
     if not api_key:
-        return "No GEMINI_API_KEY found. Please add `GEMINI_API_KEY=<your-key>` to your `.env` file."
+        return "No Gemini API key found. Add GEMINI_API_KEY (or gimini_api_key) to your .env file."
 
-    # Use Gemini via its OpenAI-compatible endpoint
-    client = OpenAI(
-        api_key=api_key,
-        base_url="https://generativelanguage.googleapis.com/v1beta/openai/",
-    )
-
+    client = genai.Client(api_key=api_key)
     context_block = build_context(dashboard_df, selected_employee_id, selected_dept)
 
-    messages: list[dict[str, Any]] = [{"role": "system", "content": SYSTEM_PROMPT}]
-    # Inject live context as a system-style note before the conversation
-    messages.append({"role": "system", "content": context_block})
-    messages.extend(history)
-    messages.append({"role": "user", "content": user_message})
+    history_lines: list[str] = []
+    for item in history:
+        role = str(item.get("role", "user")).strip()
+        content = str(item.get("content", "")).strip()
+        if content:
+            history_lines.append(f"{role}: {content}")
 
-    # Agentic tool-call loop (max 5 rounds to prevent runaway)
-    for _ in range(5):
-        response = client.chat.completions.create(
-            model="gemini-2.5-flash-lite",
-            messages=messages,  # type: ignore[arg-type]
-            tools=TOOLS,  # type: ignore[arg-type]
-            tool_choice="auto",
+    transcript = "\n".join(history_lines)
+    if transcript:
+        user_contents = (
+            "Conversation history:\n"
+            f"{transcript}\n\n"
+            "Latest user message:\n"
+            f"{user_message}"
         )
-        msg = response.choices[0].message
+    else:
+        user_contents = user_message
 
-        # No tool calls — return the final answer
-        if not msg.tool_calls:
-            return msg.content or ""
+    df_for_sql = dashboard_df.copy()
+    # Keep sqlite values primitive and serializable.
+    for col in df_for_sql.columns:
+        df_for_sql[col] = df_for_sql[col].map(lambda x: x.item() if hasattr(x, "item") else x)
 
-        # Serialize the assistant message to a plain dict before appending,
-        # so it round-trips safely across all OpenAI SDK versions.
-        serialized_tool_calls = []
-        for tc in msg.tool_calls:
-            if not isinstance(tc, ChatCompletionMessageToolCall):
-                continue
-            serialized_tool_calls.append({
-                "id": tc.id,
-                "type": tc.type,
-                "function": {
-                    "name": tc.function.name,
-                    "arguments": tc.function.arguments,
-                },
-            })
-        messages.append({
-            "role": msg.role,
-            "content": msg.content,
-            "tool_calls": serialized_tool_calls,
-        })
+    schema_lines = []
+    for col in df_for_sql.columns:
+        dtype = str(df_for_sql[col].dtype)
+        schema_lines.append(f"- \"{col}\" ({dtype})")
+    schema_text = "\n".join(schema_lines)
 
-        # Execute each tool call and append results
-        for tc in msg.tool_calls:
-            if not isinstance(tc, ChatCompletionMessageToolCall):
-                continue
-            fn_name = tc.function.name
-            try:
-                args = json.loads(tc.function.arguments)
-            except Exception:
-                args = {}
+    sql_prompt = (
+        "You are a SQL generator for SQLite. "
+        "Given the user question and schema, return ONLY one valid SQLite SELECT query and nothing else.\n"
+        "Rules:\n"
+        "1) Output SQL only, no markdown fences, no explanations.\n"
+        "2) Use table name turnover_data.\n"
+        "3) Quote column names with double quotes when needed.\n"
+        "4) Only SELECT statements are allowed (no INSERT/UPDATE/DELETE/ALTER/PRAGMA).\n"
+        "5) Prefer concise outputs: aggregations or LIMIT for long lists.\n\n"
+        f"Dashboard context:\n{context_block}\n\n"
+        f"Schema:\n{schema_text}\n\n"
+        f"Conversation:\n{user_contents}\n"
+    )
 
-            if fn_name == "list_high_risk_employees":
-                result = list_high_risk_employees(dashboard_df, **args)
-            elif fn_name == "get_employee_risk":
-                result = get_employee_risk(dashboard_df, **args)
-            elif fn_name == "get_department_summary":
-                result = get_department_summary(dashboard_df, **args)
-            elif fn_name == "simulate_what_if":
-                result = simulate_what_if(dashboard_df, raw_df, api, **args)
-            elif fn_name == "rank_departments_by_risk":
-                result = rank_departments_by_risk(dashboard_df, **args)
-            elif fn_name == "analyze_risk_by_group":
-                result = analyze_risk_by_group(dashboard_df, **args)
-            elif fn_name == "get_company_risk_stats":
-                result = get_company_risk_stats(dashboard_df)
-            elif fn_name == "find_employees_by_criteria":
-                result = find_employees_by_criteria(dashboard_df, **args)
-            elif fn_name == "list_available_columns":
-                result = list_available_columns(dashboard_df)
-            else:
-                result = f"Unknown tool: {fn_name}"
+    try:
+        sql_response = client.models.generate_content(
+            model="gemini-2.5-flash-lite",
+            contents=sql_prompt,
+            config=types.GenerateContentConfig(
+                temperature=0,
+            ),
+        )
+    except Exception as e:
+        return f"Gemini SQL generation failed: {e}"
 
-            messages.append({
-                "role": "tool",
-                "tool_call_id": tc.id,
-                "content": result,
-            })
+    sql_query = (getattr(sql_response, "text", "") or "").strip()
+    if sql_query.startswith("```"):
+        sql_query = sql_query.strip("`").strip()
+        if sql_query.lower().startswith("sql"):
+            sql_query = sql_query[3:].strip()
 
-    return "I was unable to complete the request after several attempts. Please try rephrasing your question."
+    if not sql_query:
+        return "I could not generate a SQL query for that request."
+
+    normalized_sql = sql_query.lstrip().lower()
+    if not normalized_sql.startswith("select"):
+        return "Generated SQL was rejected because it is not a SELECT query."
+
+    try:
+        with sqlite3.connect(":memory:") as conn:
+            df_for_sql.to_sql("turnover_data", conn, index=False, if_exists="replace")
+            result_df = pd.read_sql_query(sql_query, conn)
+    except Exception as e:
+        return (
+            "I generated SQL but execution failed.\n"
+            f"SQL: {sql_query}\n"
+            f"Error: {e}"
+        )
+
+    preview_rows = result_df.head(25).to_dict(orient="records")
+    result_payload = {
+        "row_count": int(len(result_df)),
+        "columns": list(result_df.columns),
+        "rows_preview": preview_rows,
+        "truncated": len(result_df) > 25,
+    }
+
+    answer_prompt = (
+        "You are an HR analytics assistant.\n"
+        "Write a short answer (max 4 lines) based only on the SQL result payload.\n"
+        "If there are zero rows, say no matching records were found.\n"
+        "Be direct and business-friendly.\n\n"
+        f"User question:\n{user_message}\n\n"
+        f"Executed SQL:\n{sql_query}\n\n"
+        f"SQL result payload:\n{result_payload}\n"
+    )
+
+    try:
+        answer_response = client.models.generate_content(
+            model="gemini-2.5-flash-lite",
+            contents=answer_prompt,
+            config=types.GenerateContentConfig(
+                temperature=0.2,
+            ),
+        )
+    except Exception as e:
+        return f"Gemini result summarization failed: {e}"
+
+    answer_text = (getattr(answer_response, "text", "") or "").strip()
+    if not answer_text:
+        return "I executed the SQL query but could not generate a final summary."
+
+    return answer_text
