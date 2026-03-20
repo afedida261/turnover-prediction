@@ -32,14 +32,72 @@ st.markdown("""
         border-radius: 10px;
         box-shadow: 0 2px 8px rgba(0,0,0,0.08);
         padding: 18px 20px;
+        color: #0f172a !important;
     }
-    div[data-testid="stMetric"] label { font-size: 0.85rem; }
+    div[data-testid="stMetric"] * { 
+        color: #0f172a !important;
+    }
+    div[data-testid="stMetric"] label { 
+        font-size: 0.85rem; 
+        color: #0f172a !important;
+    }
     .stTabs [data-baseweb="tab-list"] {
         gap: 2rem;
     }
     .stTabs [data-baseweb="tab"] {
         padding: 1rem 0;
         font-size: 1.1rem;
+    }
+    /* Floating chat launcher + hint bubble */
+    div[data-testid="stPopover"] {
+        position: fixed;
+        right: 1.25rem;
+        bottom: 1.25rem;
+        z-index: 1000;
+    }
+    div[data-testid="stPopover"] button {
+        width: 56px;
+        height: 56px;
+        border-radius: 999px;
+        border: none;
+        font-size: 1.2rem;
+        font-weight: 700;
+        background: linear-gradient(135deg, #0ea5e9, #0284c7);
+        color: #ffffff;
+        box-shadow: 0 10px 24px rgba(2, 132, 199, 0.35);
+    }
+    div[data-testid="stPopover"] button:hover {
+        background: linear-gradient(135deg, #0284c7, #0369a1);
+    }
+    div[data-testid="stPopoverContent"] {
+        width: min(92vw, 390px) !important;
+        border-radius: 14px;
+        border: 1px solid #e2e8f0;
+        box-shadow: 0 16px 36px rgba(15, 23, 42, 0.15);
+    }
+    .chat-launcher-hint {
+        position: fixed;
+        right: 5.4rem;
+        bottom: 2.1rem;
+        z-index: 999;
+        background: #ffffff;
+        border: 1px solid #dbeafe;
+        border-radius: 999px;
+        padding: 0.45rem 0.8rem;
+        font-size: 0.82rem;
+        color: #0f172a;
+        box-shadow: 0 8px 20px rgba(2, 132, 199, 0.18);
+        white-space: nowrap;
+    }
+    .chat-launcher-hint::after {
+        content: "";
+        position: absolute;
+        right: -7px;
+        top: 50%;
+        transform: translateY(-50%);
+        border-left: 8px solid #ffffff;
+        border-top: 6px solid transparent;
+        border-bottom: 6px solid transparent;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -80,14 +138,139 @@ if dashboard_df.empty:
     st.error(f"Data file **{DATA_PATH}** not found. Please run `python main.py` first.")
     st.stop()
 
+
+def ensure_chat_state() -> None:
+    if "chat_messages" not in st.session_state:
+        st.session_state.chat_messages = []
+
+
+def process_chat_prompt(prompt: str, dashboard_df: pd.DataFrame, raw_df: pd.DataFrame, api, chat_emp, chat_dept) -> None:
+    if not prompt or not prompt.strip():
+        return
+
+    clean_prompt = prompt.strip()
+    st.session_state.chat_messages.append({"role": "user", "content": clean_prompt})
+
+    with st.spinner("Thinking..."):
+        reply = chatbot.chat(
+            user_message=clean_prompt,
+            history=st.session_state.chat_messages[:-1],
+            dashboard_df=dashboard_df,
+            raw_df=raw_df,
+            api=api,
+            selected_employee_id=chat_emp,
+            selected_dept=chat_dept,
+        )
+
+    st.session_state.chat_messages.append({"role": "assistant", "content": reply})
+
+
+def render_floating_chat_widget(dashboard_df: pd.DataFrame, raw_df: pd.DataFrame, api) -> None:
+    ensure_chat_state()
+
+    all_departments = sorted(
+        [str(x) for x in dashboard_df["Budget Section"].dropna().unique() if str(x).strip() != ""]
+    )
+
+    dept_default = "All Departments"
+    emp_default = "All Employees"
+
+    if "chat_filter_dept" not in st.session_state:
+        st.session_state["chat_filter_dept"] = dept_default
+
+    valid_dept_options = [dept_default] + all_departments
+    if st.session_state.get("chat_filter_dept") not in valid_dept_options:
+        st.session_state["chat_filter_dept"] = dept_default
+
+    st.markdown('<div class="chat-launcher-hint">What do you want to know?</div>', unsafe_allow_html=True)
+
+    with st.popover("💬 ", help="Open HR Assistant"):
+        st.markdown("#### HR Assistant")
+
+        selected_dept_option = st.selectbox(
+            "Department Scope",
+            options=valid_dept_options,
+            key="chat_filter_dept",
+        )
+        selected_dept = None if selected_dept_option == dept_default else selected_dept_option
+
+        scoped_df = dashboard_df
+        if selected_dept:
+            scoped_df = dashboard_df[dashboard_df["Budget Section"].astype(str) == selected_dept]
+
+        employee_options = sorted(scoped_df["Employee ID"].astype(str).unique().tolist())
+        valid_emp_options = [emp_default] + employee_options
+
+        if "chat_filter_emp" not in st.session_state:
+            st.session_state["chat_filter_emp"] = emp_default
+        if st.session_state.get("chat_filter_emp") not in valid_emp_options:
+            st.session_state["chat_filter_emp"] = emp_default
+
+        selected_emp_option = st.selectbox(
+            "Employee Scope",
+            options=valid_emp_options,
+            key="chat_filter_emp",
+        )
+        selected_emp = None if selected_emp_option == emp_default else selected_emp_option
+
+        context_bits = []
+        if selected_dept:
+            context_bits.append(f"Department: **{selected_dept}**")
+        if selected_emp:
+            context_bits.append(f"Employee: **{selected_emp}**")
+        if context_bits:
+            st.caption(" | ".join(context_bits))
+        else:
+            st.caption("Query scope: company-wide")
+
+        st.markdown("**Example Questions**")
+        examples = [
+            "Which department has the highest average risk?",
+            "Who are the 5 highest-risk employees?",
+            "How does risk vary by job rank?",
+            "Show employees with risk above 70%.",
+            "Give me the overall risk statistics.",
+        ]
+
+        selected_example = None
+        for i, ex in enumerate(examples):
+            if st.button(ex, use_container_width=True, key=f"floating_ex_{i}"):
+                selected_example = ex
+
+        st.markdown("---")
+
+        for msg in st.session_state.chat_messages[-4:]:
+            role_label = "You" if msg["role"] == "user" else "Assistant"
+            st.markdown(f"**{role_label}:** {msg['content']}")
+
+        st.markdown("---")
+        with st.form("floating_chat_form", clear_on_submit=True):
+            typed_prompt = st.text_input(
+                "Ask about turnover risk",
+                placeholder="Type your question...",
+                label_visibility="collapsed",
+            )
+            send_clicked = st.form_submit_button("Send", use_container_width=True)
+
+        if selected_example:
+            process_chat_prompt(selected_example, dashboard_df, raw_df, api, selected_emp, selected_dept)
+            st.rerun()
+
+        if send_clicked and typed_prompt:
+            process_chat_prompt(typed_prompt, dashboard_df, raw_df, api, selected_emp, selected_dept)
+            st.rerun()
+
+        if st.button("Clear Chat", use_container_width=True, key="floating_clear_chat"):
+            st.session_state.chat_messages = []
+            st.rerun()
+
 # ---------------------------------------------------------------------------
 # Tabs Setup
 # ---------------------------------------------------------------------------
-tab_macro, tab_meso, tab_micro, tab_chat = st.tabs([
+tab_macro, tab_meso, tab_micro = st.tabs([
     "Macro View (Company)",
     "Meso View (Team/Department)",
     "Micro View (Individual Employee)",
-    "HR Assistant",
 ])
 
 # ===========================================================================
@@ -567,78 +750,4 @@ with tab_micro:
                 )
                 st.plotly_chart(fig_diff, width="stretch", config={"displayModeBar": False})
 
-# ===========================================================================
-# HR ASSISTANT (Chat)
-# ===========================================================================
-with tab_chat:
-    st.markdown("Ask questions about turnover risk across the company, a department, or a specific employee.")
-
-    # Initialize chat history
-    if "chat_messages" not in st.session_state:
-        st.session_state.chat_messages = []
-
-    chat_emp  = st.session_state.get("chat_selected_emp_id")
-    chat_dept = st.session_state.get("chat_selected_dept")
-
-    # ── Side panel + history in columns ──────────────────────────────────────
-    col_chat_main, col_chat_side = st.columns([3, 1])
-
-    with col_chat_side:
-        st.markdown("#### Context")
-        if chat_emp:
-            st.info(f"Tracking employee **{chat_emp}** from Micro View.")
-        if chat_dept:
-            st.info(f"Tracking department **{chat_dept}** from Meso View.")
-        if not chat_emp and not chat_dept:
-            st.caption("Navigate to the Meso or Micro tab to give the assistant focused context.")
-
-        if st.button("Clear Chat", use_container_width=True):
-            st.session_state.chat_messages = []
-            st.rerun()
-
-        st.markdown("#### Example Questions")
-        examples = [
-            "Which department has the highest average risk?",
-            "Who are the 5 highest-risk employees?",
-            "How does risk vary by job rank?",
-            "Show employees with risk above 70%.",
-            "Give me the overall risk statistics.",
-        ]
-        for ex in examples:
-            if st.button(ex, use_container_width=True, key=f"ex_{ex[:20]}"):
-                st.session_state["_pending_prompt"] = ex
-                st.rerun()
-
-    with col_chat_main:
-        for msg in st.session_state.chat_messages:
-            with st.chat_message(msg["role"]):
-                st.markdown(msg["content"])
-
-    # ── Chat input at tab root (required for reliable rendering) ─────────────
-    prompt = st.chat_input("Ask about turnover risk...")
-
-    # Handle example-button click (stored in session state to survive rerun)
-    if "_pending_prompt" in st.session_state:
-        prompt = st.session_state.pop("_pending_prompt")
-
-    if prompt:
-        st.session_state.chat_messages.append({"role": "user", "content": prompt})
-
-        with col_chat_main:
-            with st.chat_message("user"):
-                st.markdown(prompt)
-
-            with st.chat_message("assistant"):
-                with st.spinner("Thinking..."):
-                    reply = chatbot.chat(
-                        user_message=prompt,
-                        history=st.session_state.chat_messages[:-1],
-                        dashboard_df=dashboard_df,
-                        raw_df=raw_df,
-                        api=api,
-                        selected_employee_id=chat_emp,
-                        selected_dept=chat_dept,
-                    )
-                st.markdown(reply)
-
-        st.session_state.chat_messages.append({"role": "assistant", "content": reply})
+render_floating_chat_widget(dashboard_df, raw_df, api)
