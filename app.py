@@ -12,6 +12,7 @@ sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 try:
     from src.inference import TurnoverInferenceAPI
     from src.config import FEATURE_DESCRIPTIONS
+    from src import chatbot
 except ImportError as e:
     st.error(f"Could not import internal modules: {e}")
     st.stop()
@@ -81,7 +82,12 @@ if dashboard_df.empty:
 # ---------------------------------------------------------------------------
 # Tabs Setup
 # ---------------------------------------------------------------------------
-tab_macro, tab_meso, tab_micro = st.tabs(["Macro View (Company)", "Meso View (Team/Department)", "Micro View (Individual Employee)"])
+tab_macro, tab_meso, tab_micro, tab_chat = st.tabs([
+    "Macro View (Company)",
+    "Meso View (Team/Department)",
+    "Micro View (Individual Employee)",
+    "HR Assistant",
+])
 
 # ===========================================================================
 # MACRO VIEW
@@ -197,7 +203,8 @@ with tab_meso:
         departments = sorted([str(x) for x in dashboard_df["Budget Section"].dropna().unique() if str(x).strip() != ""])
         
         selected_dept = st.selectbox("Select Team / Budget Section", options=departments, index=0)
-        
+        st.session_state["chat_selected_dept"] = selected_dept
+
         if selected_dept:
             dept_df = dashboard_df[dashboard_df["Budget Section"].astype(str) == selected_dept]
             
@@ -311,7 +318,8 @@ with tab_micro:
         valid_employees = sorted(dashboard_df["Employee ID"].unique())
         
         selected_emp_id = st.selectbox("Search / Select Employee ID", options=[""] + valid_employees)
-        
+        st.session_state["chat_selected_emp_id"] = selected_emp_id or None
+
         if selected_emp_id:
             # 1. Employee Data Setup
             emp_records = raw_df[raw_df[employee_id_col] == selected_emp_id].copy()
@@ -557,3 +565,79 @@ with tab_micro:
                     xaxis=dict(zeroline=True, zerolinewidth=2, zerolinecolor='black')
                 )
                 st.plotly_chart(fig_diff, width="stretch", config={"displayModeBar": False})
+
+# ===========================================================================
+# HR ASSISTANT (Chat)
+# ===========================================================================
+with tab_chat:
+    st.markdown("Ask questions about turnover risk across the company, a department, or a specific employee.")
+
+    # Initialize chat history
+    if "chat_messages" not in st.session_state:
+        st.session_state.chat_messages = []
+
+    chat_emp  = st.session_state.get("chat_selected_emp_id")
+    chat_dept = st.session_state.get("chat_selected_dept")
+
+    # ── Side panel + history in columns ──────────────────────────────────────
+    col_chat_main, col_chat_side = st.columns([3, 1])
+
+    with col_chat_side:
+        st.markdown("#### Context")
+        if chat_emp:
+            st.info(f"Tracking employee **{chat_emp}** from Micro View.")
+        if chat_dept:
+            st.info(f"Tracking department **{chat_dept}** from Meso View.")
+        if not chat_emp and not chat_dept:
+            st.caption("Navigate to the Meso or Micro tab to give the assistant focused context.")
+
+        if st.button("Clear Chat", use_container_width=True):
+            st.session_state.chat_messages = []
+            st.rerun()
+
+        st.markdown("#### Example Questions")
+        examples = [
+            "Which department has the highest average risk?",
+            "Who are the 5 highest-risk employees?",
+            "How does risk vary by job rank?",
+            "Show employees with risk above 70%.",
+            "Give me the overall risk statistics.",
+        ]
+        for ex in examples:
+            if st.button(ex, use_container_width=True, key=f"ex_{ex[:20]}"):
+                st.session_state["_pending_prompt"] = ex
+                st.rerun()
+
+    with col_chat_main:
+        for msg in st.session_state.chat_messages:
+            with st.chat_message(msg["role"]):
+                st.markdown(msg["content"])
+
+    # ── Chat input at tab root (required for reliable rendering) ─────────────
+    prompt = st.chat_input("Ask about turnover risk...")
+
+    # Handle example-button click (stored in session state to survive rerun)
+    if "_pending_prompt" in st.session_state:
+        prompt = st.session_state.pop("_pending_prompt")
+
+    if prompt:
+        st.session_state.chat_messages.append({"role": "user", "content": prompt})
+
+        with col_chat_main:
+            with st.chat_message("user"):
+                st.markdown(prompt)
+
+            with st.chat_message("assistant"):
+                with st.spinner("Thinking..."):
+                    reply = chatbot.chat(
+                        user_message=prompt,
+                        history=st.session_state.chat_messages[:-1],
+                        dashboard_df=dashboard_df,
+                        raw_df=raw_df,
+                        api=api,
+                        selected_employee_id=chat_emp,
+                        selected_dept=chat_dept,
+                    )
+                st.markdown(reply)
+
+        st.session_state.chat_messages.append({"role": "assistant", "content": reply})

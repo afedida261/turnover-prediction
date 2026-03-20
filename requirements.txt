@@ -11,3 +11,5 @@ jupyter
 streamlit
 plotly
 joblib
+openai  # used as OpenAI-compatible client for Gemini API
+python-dotenv
