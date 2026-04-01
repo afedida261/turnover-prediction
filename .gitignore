@@ -4,6 +4,8 @@ venv/
 *.pyc
 .env
 .DS_Store
+.claude/
+.vscode/
 
 # Data files (large, not tracked)
 *.csv
