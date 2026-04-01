@@ -4,6 +4,15 @@ venv/
 *.pyc
 .env
 .DS_Store
+
+# Data files (large, not tracked)
 *.csv
 *.pdf
 *.xlsx
+*.txt
+data/
+output/
+artifacts/
+split/
+WizWhy/
+notebooks/

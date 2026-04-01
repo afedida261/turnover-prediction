@@ -16,7 +16,6 @@ from src.evaluator import Evaluator
 from src.models.nn_model import NeuralNetTurnover
 from src.evaluator import Evaluator
 from src.config import TARGET_COL, FEATURE_DESCRIPTIONS, ID_COLUMNS, set_seed
-from src.analysis.fuzzy_importance import FuzzyFeatureImportance
 
 def get_feature_importance(model, feature_names, top_n=15):
     """Extract and format feature importance from model."""
@@ -73,13 +72,16 @@ def get_prediction_confidence(y_prob):
 
 def main():
     parser = argparse.ArgumentParser(description="Turnover Prediction Pipeline")
-    parser.add_argument('--data_path', type=str, default='first_file.xlsx',
+    parser.add_argument('--data_path', type=str, default='data/first_file.xlsx',
                         help="Path to the Excel data file")
-    parser.add_argument('--output_path', type=str, default='predictions_output.xlsx',
+    parser.add_argument('--output_path', type=str, default='output/predictions_output.xlsx',
                         help="Path for output predictions file")
     parser.add_argument('--seed', type=int, default=42,
                         help="Random seed for reproducibility")
-    
+    parser.add_argument('--split_file', type=str, default=None,
+                        help="Path to split directory containing train_ids.txt and test_ids.txt. "
+                             "If provided, uses fixed employee-ID-based split instead of random split.")
+
     args = parser.parse_args()
     
     # Set seed for reproducibility
@@ -118,19 +120,50 @@ def main():
     print(f"  - Stayed (0): {(y==0).sum()} ({(y==0).mean()*100:.1f}%)")
     print(f"  - Left (1): {(y==1).sum()} ({(y==1).mean()*100:.1f}%)")
     
-    # Split into train/validation/test (60/20/20)
-    X_temp, X_test, y_temp, y_test = train_test_split(
-        X, y, test_size=0.2, random_state=args.seed, stratify=y
-    )
-    X_train, X_val, y_train, y_val = train_test_split(
-        X_temp, y_temp, test_size=0.25, random_state=args.seed, stratify=y_temp  # 0.25 of 0.8 = 0.2
-    )
-    
-    print(f"\nData Split:")
-    print(f"  - Training:   {len(X_train)} samples ({len(X_train)/len(X)*100:.1f}%)")
-    print(f"  - Validation: {len(X_val)} samples ({len(X_val)/len(X)*100:.1f}%)")
-    print(f"  - Test:       {len(X_test)} samples ({len(X_test)/len(X)*100:.1f}%)")
-    
+    # Split into train/test
+    if args.split_file:
+        # --- Fixed split based on employee IDs from create_split.py ---
+        train_ids_path = os.path.join(args.split_file, "train_ids.txt")
+        test_ids_path = os.path.join(args.split_file, "test_ids.txt")
+
+        if not os.path.exists(train_ids_path) or not os.path.exists(test_ids_path):
+            print(f"Error: Could not find train_ids.txt / test_ids.txt in {args.split_file}")
+            return
+
+        with open(train_ids_path) as f:
+            train_ids = set(line.strip() for line in f if line.strip())
+        with open(test_ids_path) as f:
+            test_ids = set(line.strip() for line in f if line.strip())
+
+        # kept_employee_ids aligns 1-to-1 with X rows after aggregation
+        kept_ids = [str(int(float(eid))) for eid in loader.get_kept_indices()]
+
+        train_mask = [eid in train_ids for eid in kept_ids]
+        test_mask  = [eid in test_ids  for eid in kept_ids]
+
+        X_train = X[train_mask]
+        y_train = y[train_mask]
+        X_test  = X[test_mask]
+        y_test  = y[test_mask]
+        X_val, y_val = X_test, y_test  # use test as validation for best-model selection
+
+        print(f"\nData Split (fixed, from {args.split_file}):")
+        print(f"  - Training: {len(X_train)} samples ({len(X_train)/len(X)*100:.1f}%)")
+        print(f"  - Test:     {len(X_test)} samples ({len(X_test)/len(X)*100:.1f}%)")
+    else:
+        # --- Default random 60/20/20 split ---
+        X_temp, X_test, y_temp, y_test = train_test_split(
+            X, y, test_size=0.2, random_state=args.seed, stratify=y
+        )
+        X_train, X_val, y_train, y_val = train_test_split(
+            X_temp, y_temp, test_size=0.25, random_state=args.seed, stratify=y_temp
+        )
+
+        print(f"\nData Split (random 60/20/20):")
+        print(f"  - Training:   {len(X_train)} samples ({len(X_train)/len(X)*100:.1f}%)")
+        print(f"  - Validation: {len(X_val)} samples ({len(X_val)/len(X)*100:.1f}%)")
+        print(f"  - Test:       {len(X_test)} samples ({len(X_test)/len(X)*100:.1f}%)")
+
     # Store test indices for output mapping
     test_indices = X_test.index
     
@@ -200,54 +233,7 @@ def main():
     # 5. Feature Importance Analysis
     print("\n[3] Feature Importance Analysis")
     print("-"*40)
-    
-    # Initialize Fuzzy Feature Importance
-    fuzzy_analyzer = FuzzyFeatureImportance(X.columns.tolist())
-    
-    # Collect importance from all trained models for fuzzy analysis
-    print("\n  Computing Fuzzy Consensus Importance from trained models...")
-    for name, model in models.items():
-        try:
-            # We need to extract the raw importance dict first
-            # The get_feature_importance helper below returns a list of tuples, which is not what we want
-            # So we access the model method directly if possible
-            if hasattr(model, 'get_feature_importance'):
-                imp_dict = model.get_feature_importance()
-                # Ensure it's a dict
-                if isinstance(imp_dict, (list, np.ndarray)):
-                    imp_dict = dict(zip(X.columns.tolist(), imp_dict))
-                elif not isinstance(imp_dict, dict):
-                    # Handle other cases or skip
-                    continue
-                    
-                fuzzy_analyzer.add_model_importance(name, imp_dict)
-        except Exception as e:
-            print(f"    - Could not extract importance from {name}: {e}")
 
-    # Calculate Consensus
-    consensus_df = fuzzy_analyzer.calculate_consensus()
-    
-    if not consensus_df.empty:
-        print("\n  Top 15 Consensus Risk Drivers (Fuzzy Information Fusion):")
-        print("  " + "-"*85)
-        print(f"  {'Rank':<4} | {'Feature':<35} | {'Consensus Score':<15} | {'Interpretation':<15}")
-        print("  " + "-"*85)
-        
-        for i, row in enumerate(consensus_df.head(15).itertuples(), 1):
-            feat = row.Feature
-            score = row.Consensus_Score
-            
-            # Interpretation
-            if score >= 0.7: interpretation = "High Risk"
-            elif score >= 0.4: interpretation = "Medium Risk"
-            else: interpretation = "Low Risk"
-            
-            # Readable name
-            readable = FEATURE_DESCRIPTIONS.get(feat, feat)
-            if len(readable) > 32: readable = readable[:29] + "..."
-            
-            print(f"  {i:<4} | {readable:<35} | {score:<15.4f} | {interpretation:<15}")
-            
     if best_model is not None:
         print(f"\nTop features from best model ({best_model_name}) [Reference]:")
         importance = get_feature_importance(best_model, X.columns.tolist())
@@ -349,10 +335,19 @@ def main():
         pipeline = {
             'model': best_model,
             'scaler': loader.get_scaler(),
-            'feature_names': loader.get_feature_names()
+            'feature_names': loader.get_feature_names(),
+            'split_type': 'fixed' if args.split_file else 'random',
+            'split_file': args.split_file
         }
-        joblib.dump(pipeline, 'artifacts/model_pipeline.pkl')
-        print(f"\n  Saved model pipeline artifact to artifacts/model_pipeline.pkl")
+
+        # Determine artifact filename based on split type
+        if args.split_file:
+            artifact_path = 'artifacts/model_pipeline_split.pkl'
+        else:
+            artifact_path = 'artifacts/model_pipeline_random.pkl'
+
+        joblib.dump(pipeline, artifact_path)
+        print(f"\n  Saved model pipeline artifact to {artifact_path}")
 
     # 8. Summary
     print("\n" + "="*80)

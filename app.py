@@ -6,8 +6,10 @@ import plotly.graph_objects as go
 import os
 import sys
 
-# Add src to path for internal imports
-sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+# Resolve all paths relative to this script's directory, not CWD
+_SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+os.chdir(_SCRIPT_DIR)
+sys.path.append(_SCRIPT_DIR)
 
 try:
     from src.inference import TurnoverInferenceAPI
@@ -107,9 +109,9 @@ st.title("Executive Turnover Dashboard")
 # ---------------------------------------------------------------------------
 # Data Loading & Initialization
 # ---------------------------------------------------------------------------
-# DATA_PATH = "predictions_output.xlsx"
-DATA_PATH = "predictions_output_v4.xlsx"
-RAW_DATA_PATH = "first_file.xlsx"
+# DATA_PATH = "output/predictions_output.xlsx"
+DATA_PATH = "output/predictions_output_v4.xlsx"
+RAW_DATA_PATH = "data/first_file.xlsx"
 
 @st.cache_data
 def load_dashboard_data(filepath: str = DATA_PATH) -> pd.DataFrame:
@@ -381,7 +383,7 @@ with tab_meso:
     st.markdown("Analyze turnover risk across specific teams or departments to identify localized retention challenges.")
     
     if dashboard_df.empty:
-        st.warning("Data not properly loaded. Missing `predictions_output.xlsx`.")
+        st.warning(f"Data not properly loaded. Missing `{DATA_PATH}`.")
     else:
         # Get unique budget sections (departments)
         departments = sorted([str(x) for x in dashboard_df["Budget Section"].dropna().unique() if str(x).strip() != ""])
@@ -494,7 +496,7 @@ with tab_micro:
     st.markdown("Select an employee to view their current profile and simulate how changes to key factors affect their turnover risk.")
     
     if raw_df.empty or api is None:
-        st.warning("Raw data or model not properly loaded. Missing `first_file.xlsx` or `artifacts/model_pipeline.pkl`. Please run `python main.py` first.")
+        st.warning("Raw data or model not properly loaded. Missing `data/first_file.xlsx` or `artifacts/model_pipeline.pkl`. Please run `python main.py` first.")
     else:
         employee_id_col = 'fictive2'
         time_col = 'fictive-ovedmiun'
