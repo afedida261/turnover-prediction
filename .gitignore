@@ -21,6 +21,3 @@ WizWhy/
 
 # Split: ignore large Excel files but track deterministic ID files
 split/*.xlsx
-
-# Python requirements (tracked for reproducibility)
-# requirements.txt is tracked
