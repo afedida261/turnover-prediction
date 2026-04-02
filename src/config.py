@@ -63,6 +63,7 @@ NUMERIC_FEATURES = [
     'Mahala',              # Department flag
     'Distance',            # Distance flag
     'WorkHours',           # Work hours flag
+    'WorkHoursIncrease',   # Omes-based workload increase level (0/1/2)
     'Sahar',               # Salary flag
     'MZV_Flag',            # MZV flag
     'hedrut',              # Absence flag
@@ -121,6 +122,7 @@ FEATURE_DESCRIPTIONS = {
     'Mahala': 'Department Change Flag',
     'Distance': 'Distance Change Flag',
     'WorkHours': 'Work Hours Change Flag',
+    'WorkHoursIncrease': 'Workload Increase Level (>=10% / >=20%)',
     'Sahar': 'Salary Freeze Flag',
     'MZV_Flag': 'MZV Flag',
     'hedrut': 'Absence Flag',
@@ -157,6 +159,9 @@ FEATURE_DESCRIPTIONS = {
     'avg_omes_mean': 'Workload Avg (Mean)',
     'avg_omes_std': 'Workload Variability',
     'avg_omes_trend': 'Workload Trend',
+    'WorkHoursIncrease_mean': 'Workload Increase Level Avg',
+    'WorkHoursIncrease_std': 'Workload Increase Level Variability',
+    'WorkHoursIncrease_trend': 'Workload Increase Level Trend',
     'stdevp_omes_mean': 'Workload StdDev Avg',
     'stdevp_omes_std': 'Workload StdDev Variability',
     'Median_omes_mean': 'Median Workload Avg',

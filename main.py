@@ -12,10 +12,23 @@ sys.path.append(os.path.join(os.path.dirname(__file__), 'src'))
 from src.data_loader import RealExcelDataLoader
 from src.models.classifiers import LogisticRegressionTurnover, RandomForestTurnover, XGBoostTurnover, EnsembleTurnover, AdaBoostTurnover
 from src.models.nn_model import NeuralNetTurnover
+from src.models.nn_advanced import RegularizedMLPTurnover
 from src.evaluator import Evaluator
-from src.models.nn_model import NeuralNetTurnover
-from src.evaluator import Evaluator
-from src.config import TARGET_COL, FEATURE_DESCRIPTIONS, ID_COLUMNS, set_seed
+from src.config import TARGET_COL, FEATURE_DESCRIPTIONS, set_seed
+
+
+def normalize_employee_id(value):
+    """Normalize IDs for robust string matching across split files and datasets."""
+    if pd.isna(value):
+        return ""
+    value_str = str(value).strip()
+    try:
+        value_float = float(value_str)
+        if value_float.is_integer():
+            return str(int(value_float))
+    except ValueError:
+        pass
+    return value_str
 
 def get_feature_importance(model, feature_names, top_n=15):
     """Extract and format feature importance from model."""
@@ -74,8 +87,8 @@ def main():
     parser = argparse.ArgumentParser(description="Turnover Prediction Pipeline")
     parser.add_argument('--data_path', type=str, default='data/first_file.xlsx',
                         help="Path to the Excel data file")
-    parser.add_argument('--output_path', type=str, default='output/predictions_output.xlsx',
-                        help="Path for output predictions file")
+    parser.add_argument('--output_path', type=str, default=None,
+                        help="Path for output predictions file. Defaults to output/predictions_{dataset}.xlsx")
     parser.add_argument('--seed', type=int, default=42,
                         help="Random seed for reproducibility")
     parser.add_argument('--split_file', type=str, default=None,
@@ -96,16 +109,25 @@ def main():
     if not os.path.exists(args.data_path):
         print(f"Error: Data file not found at {args.data_path}")
         return
+
+    dataset_tag = os.path.splitext(os.path.basename(args.data_path))[0]
+    dataset_config_map = {
+        'first_file': {'employee_id_col': 'fictive2', 'time_col': 'fictive-ovedmiun'},
+        'factory_two': {'employee_id_col': 'fictive-oved', 'time_col': None},
+    }
+    dataset_config = dataset_config_map.get(dataset_tag, dataset_config_map['first_file'])
+
+    if not args.output_path:
+        args.output_path = os.path.join('output', f'predictions_{dataset_tag}.xlsx')
     
     # 2. Loading & Preprocessing
     print("\n[1] Loading and preprocessing data...")
     print("-"*40)
-    loader = RealExcelDataLoader(args.data_path)
+    loader = RealExcelDataLoader(args.data_path, **dataset_config)
     df_raw = loader.load()
     df = loader.preprocess(df_raw)
     
-    # Get IDs for output
-    original_ids = loader.get_original_ids()
+    # Get feature names for reporting
     feature_names = loader.get_feature_names()
     
     # 3. Split Data
@@ -131,12 +153,12 @@ def main():
             return
 
         with open(train_ids_path) as f:
-            train_ids = set(line.strip() for line in f if line.strip())
+            train_ids = set(normalize_employee_id(line.strip()) for line in f if line.strip())
         with open(test_ids_path) as f:
-            test_ids = set(line.strip() for line in f if line.strip())
+            test_ids = set(normalize_employee_id(line.strip()) for line in f if line.strip())
 
         # kept_employee_ids aligns 1-to-1 with X rows after aggregation
-        kept_ids = [str(int(float(eid))) for eid in loader.get_kept_indices()]
+        kept_ids = [normalize_employee_id(eid) for eid in loader.get_kept_indices()]
 
         train_mask = [eid in train_ids for eid in kept_ids]
         test_mask  = [eid in test_ids  for eid in kept_ids]
@@ -183,6 +205,8 @@ def main():
         ),
         "AdaBoost": AdaBoostTurnover(n_estimators=200, learning_rate=0.5),
         "Ensemble": EnsembleTurnover(),
+        "Neural Net": NeuralNetTurnover(epochs=100, batch_size=32, learning_rate=0.001),
+        "Deep MLP (Regularized)": RegularizedMLPTurnover(epochs=150, batch_size=32, lr=0.001, n_folds=5),
     }
     
     evaluator = Evaluator()
@@ -275,24 +299,37 @@ def main():
         
         # Get the employee IDs that were kept after aggregation
         kept_employee_ids = loader.get_kept_indices()
+
+        employee_id_col = dataset_config['employee_id_col']
+        time_col = dataset_config['time_col']
         
         # Create output with most recent record per employee from raw data
-        output_df = df_raw.sort_values(['fictive2', 'fictive-ovedmiun']).groupby('fictive2').last().reset_index()
-        output_df = output_df[output_df['fictive2'].isin(kept_employee_ids)].copy()
+        if time_col and time_col in df_raw.columns:
+            output_df = (
+                df_raw
+                .sort_values([employee_id_col, time_col])
+                .groupby(employee_id_col)
+                .last()
+                .reset_index()
+            )
+        else:
+            output_df = df_raw.groupby(employee_id_col).last().reset_index()
+
+        output_df = output_df[output_df[employee_id_col].isin(kept_employee_ids)].copy()
         
         # Sort by employee ID to match the order of predictions
-        output_df = output_df.sort_values('fictive2').reset_index(drop=True)
+        output_df = output_df.sort_values(employee_id_col).reset_index(drop=True)
         
         # Create a mapping from employee ID to prediction
         pred_df = pd.DataFrame({
-            'fictive2': kept_employee_ids,
+            employee_id_col: kept_employee_ids,
             'turnover_prob': y_prob_all,
             'prediction_confidence': confidence_all
         })
         
         # Merge predictions with output
         output_df = output_df.drop(columns=['turnover_prob'], errors='ignore')
-        output_df = output_df.merge(pred_df, on='fictive2', how='left')
+        output_df = output_df.merge(pred_df, on=employee_id_col, how='left')
         
         # Add risk category
         output_df['risk_category'] = pd.cut(
@@ -305,13 +342,14 @@ def main():
         # Create reverse mapping for output columns
         output_column_mapping = {
             'leave_ind': 'Left Company (Actual)',
-            'fictive-ovedmiun': 'Record Index',
-            'fictive2': 'Employee ID',
+            employee_id_col: 'Employee ID',
             'turnover_prob': 'Turnover Probability',
             'prediction_confidence': 'Prediction Confidence',
             'risk_category': 'Risk Category',
             **FEATURE_DESCRIPTIONS  # Include all feature descriptions
         }
+        if time_col and time_col in output_df.columns:
+            output_column_mapping[time_col] = 'Record Index'
         
         # Apply column renaming
         output_df = output_df.rename(columns=output_column_mapping)
@@ -320,6 +358,7 @@ def main():
         output_df = output_df.sort_values('Turnover Probability', ascending=False)
         
         # Save to Excel
+        os.makedirs(os.path.dirname(args.output_path), exist_ok=True)
         output_df.to_excel(args.output_path, index=False)
         print(f"\n  Output saved to: {args.output_path}")
         print(f"  Total unique employees: {len(output_df)}")
@@ -336,15 +375,15 @@ def main():
             'model': best_model,
             'scaler': loader.get_scaler(),
             'feature_names': loader.get_feature_names(),
+            'dataset_tag': dataset_tag,
+            'dataset_config': dataset_config,
             'split_type': 'fixed' if args.split_file else 'random',
             'split_file': args.split_file
         }
 
         # Determine artifact filename based on split type
-        if args.split_file:
-            artifact_path = 'artifacts/model_pipeline_split.pkl'
-        else:
-            artifact_path = 'artifacts/model_pipeline_random.pkl'
+        split_type = 'fixed' if args.split_file else 'random'
+        artifact_path = os.path.join('artifacts', f'model_pipeline_{dataset_tag}_{split_type}.pkl')
 
         joblib.dump(pipeline, artifact_path)
         print(f"\n  Saved model pipeline artifact to {artifact_path}")

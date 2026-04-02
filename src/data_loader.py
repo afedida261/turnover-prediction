@@ -74,10 +74,11 @@ class RealExcelDataLoader(BaseDataLoader):
     Handles time-series aggregation, feature engineering, normalization, and preprocessing
     """
     
-    def __init__(self, filepath):
+    def __init__(self, filepath, employee_id_col: str = 'fictive2', time_col: str = 'fictive-ovedmiun'):
         super().__init__(filepath)
         self.original_ids = None
-        self.employee_id_col = 'fictive2'
+        self.employee_id_col = employee_id_col
+        self.time_col = time_col
         self.scaler = MinMaxScaler()
         self.numeric_columns_to_scale = []
         
@@ -102,8 +103,13 @@ class RealExcelDataLoader(BaseDataLoader):
         data = df.copy()
         self.preprocessing_report = {'original_rows': len(data)}
         
-        # Store original IDs for output mapping
-        self.original_ids = data[ID_COLUMNS].copy()
+        # Store original IDs for output mapping (keep only columns that exist)
+        id_cols = [c for c in ID_COLUMNS if c in data.columns]
+        if self.employee_id_col in data.columns and self.employee_id_col not in id_cols:
+            id_cols.append(self.employee_id_col)
+        if self.time_col and self.time_col in data.columns and self.time_col not in id_cols:
+            id_cols.append(self.time_col)
+        self.original_ids = data[id_cols].copy() if id_cols else pd.DataFrame(index=data.index)
         
         # 1. Aggregate time-series data per employee
         print("\n[Preprocessing] Aggregating time-series data...")
@@ -126,7 +132,13 @@ class RealExcelDataLoader(BaseDataLoader):
         data = self._encode_categoricals(data)
         
         # 6. Remove non-feature columns (IDs, output column) but KEEP TARGET
-        cols_to_drop = [c for c in EXCLUDE_COLUMNS if c in data.columns and c != TARGET_COL]
+        dynamic_exclude = [self.employee_id_col]
+        if self.time_col:
+            dynamic_exclude.append(self.time_col)
+        cols_to_drop = [
+            c for c in (EXCLUDE_COLUMNS + dynamic_exclude)
+            if c in data.columns and c != TARGET_COL
+        ]
         data.drop(columns=cols_to_drop, inplace=True, errors='ignore')
         
         # 7. Normalize numeric features (0-1 scaling)
@@ -156,13 +168,33 @@ class RealExcelDataLoader(BaseDataLoader):
         Aggregate multiple time periods per employee into single row with trend features.
         This handles the time-series nature where fictive2 identifies the same employee over time.
         """
+        if self.employee_id_col not in data.columns:
+            raise ValueError(
+                f"Employee ID column '{self.employee_id_col}' not found in dataset."
+            )
+
+        # If there is no time column, treat input as one-row-per-employee and skip aggregation.
+        if not self.time_col or self.time_col not in data.columns:
+            period_counts = data.groupby(self.employee_id_col).size().reset_index(name='num_periods')
+            aggregated = data.groupby(self.employee_id_col, as_index=False).last()
+            aggregated = aggregated.merge(period_counts, on=self.employee_id_col, how='left')
+            aggregated = self._add_omes_increase_flag(aggregated)
+            print(
+                f"  Time column missing/disabled; skipped time aggregation and kept {len(aggregated)} employees"
+            )
+            self.preprocessing_report['unique_employees'] = len(aggregated)
+            return aggregated
+
         # Sort by employee and time index
-        data = data.sort_values([self.employee_id_col, 'fictive-ovedmiun'])
+        data = data.sort_values([self.employee_id_col, self.time_col])
         
         # Define aggregation strategy for each column type
         # Numeric columns: get last value, first value, mean, std, and trend (last - first)
         numeric_cols = data.select_dtypes(include=[np.number]).columns.tolist()
-        numeric_cols = [c for c in numeric_cols if c not in ID_COLUMNS + [TARGET_COL, OUTPUT_COLUMN]]
+        excluded_numeric = set(ID_COLUMNS + [TARGET_COL, OUTPUT_COLUMN, self.employee_id_col])
+        if self.time_col:
+            excluded_numeric.add(self.time_col)
+        numeric_cols = [c for c in numeric_cols if c not in excluded_numeric]
         
         # Categorical columns: get the most recent value (last)
         cat_cols = data.select_dtypes(include=['object']).columns.tolist()
@@ -210,6 +242,7 @@ class RealExcelDataLoader(BaseDataLoader):
         # Count number of time periods per employee
         period_counts = data.groupby(self.employee_id_col).size().reset_index(name='num_periods')
         aggregated = aggregated.merge(period_counts, on=self.employee_id_col)
+        aggregated = self._add_omes_increase_flag(aggregated, raw_time_series=data)
         
         print(f"  Aggregated {len(data)} records → {len(aggregated)} unique employees")
         print(f"  Created trend features for {len(numeric_cols)} numeric columns")
@@ -217,6 +250,60 @@ class RealExcelDataLoader(BaseDataLoader):
         self.preprocessing_report['unique_employees'] = len(aggregated)
         
         return aggregated
+
+    def _add_omes_increase_flag(
+        self,
+        data: pd.DataFrame,
+        raw_time_series: pd.DataFrame = None
+    ) -> pd.DataFrame:
+        """
+        Add an Omes-based workload increase flag:
+        0 = no increase >=10%, 1 = increase >=10%, 2 = increase >=20%.
+
+        Omes ratio is defined as: avg_omes / stdevp_omes.
+        """
+        feature_name = 'WorkHoursIncrease'
+        data[feature_name] = 0
+
+        # For time-series data, compare latest quarter to previous quarter.
+        if raw_time_series is not None:
+            required_cols = {self.employee_id_col, 'avg_omes', 'stdevp_omes'}
+            if self.time_col:
+                required_cols.add(self.time_col)
+
+            if required_cols.issubset(raw_time_series.columns):
+                ts = raw_time_series.copy()
+                ts['omes_ratio'] = ts['avg_omes'] / (ts['stdevp_omes'].abs() + 0.01)
+                ts = ts.sort_values([self.employee_id_col, self.time_col])
+
+                latest = ts.groupby(self.employee_id_col)['omes_ratio'].last()
+                prev = ts.groupby(self.employee_id_col)['omes_ratio'].nth(-2)
+
+                comparison = pd.concat([latest, prev], axis=1)
+                comparison.columns = ['latest_omes_ratio', 'prev_omes_ratio']
+
+                pct_change = (
+                    (comparison['latest_omes_ratio'] - comparison['prev_omes_ratio'])
+                    / (comparison['prev_omes_ratio'].abs() + 0.01)
+                )
+                comparison[feature_name] = np.select(
+                    [pct_change >= 0.20, pct_change >= 0.10],
+                    [2, 1],
+                    default=0
+                ).astype(int)
+
+                data = data.merge(
+                    comparison[[feature_name]],
+                    left_on=self.employee_id_col,
+                    right_index=True,
+                    how='left',
+                    suffixes=('', '_from_ts')
+                )
+                if f"{feature_name}_from_ts" in data.columns:
+                    data[feature_name] = data[f"{feature_name}_from_ts"].fillna(data[feature_name]).astype(int)
+                    data.drop(columns=[f"{feature_name}_from_ts"], inplace=True)
+
+        return data
     
     def _feature_engineering(self, data: pd.DataFrame) -> pd.DataFrame:
         """
@@ -374,7 +461,7 @@ class RealExcelDataLoader(BaseDataLoader):
             missing_pct = missing_count / len(data) * 100
             missing_report[col] = {'count': missing_count, 'pct': round(missing_pct, 2)}
             
-            if col in EXCLUDE_COLUMNS or col == TARGET_COL:
+            if col in EXCLUDE_COLUMNS or col == TARGET_COL or col == self.employee_id_col or col == self.time_col:
                 continue
                 
             # Strategy based on missing percentage and column type
@@ -410,7 +497,10 @@ class RealExcelDataLoader(BaseDataLoader):
         
         # Only process numeric columns that are features
         numeric_cols = data.select_dtypes(include=[np.number]).columns
-        feature_numeric = [c for c in numeric_cols if c not in EXCLUDE_COLUMNS]
+        feature_numeric = [
+            c for c in numeric_cols
+            if c not in EXCLUDE_COLUMNS and c != self.employee_id_col and c != self.time_col
+        ]
         
         for col in feature_numeric:
             Q1 = data[col].quantile(0.25)
