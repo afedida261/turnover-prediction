@@ -1,0 +1,72 @@
+		SUMMARY  REPORT
+
+ WizWhy Version 2024 XL64U
+ PARAMETERS  OF  THE  RULES  AND  DATA
+ C:\Users\avivf\OneDrive\Desktop\Technion\Winter 25-26\Final Project\turnover-prediction\split\train_data.xlsx
+ Total number of records:  3325
+ Minimum probability of the:
+   1) if-then rules:      0.450
+   2) if-then-not rules:  0.820
+ Minimum number of cases in a rule:   50
+
+ Dependent Variable:   leave_ind
+ Predicted Value (analyzed as Boolean):   more than 0.50
+
+ Number of  rules 1050
+ Prediction error costs:  
+     The cost of a miss:   2
+     The cost of a false alarm:   1
+ Average probability of the predicted value is   0.298
+
+ ANALYSIS  OF  THE  RULES  EXPLANATORY  POWER
+ Decision point:  Predict  more than 0.50 when conclusive probability is more than   0.397
+ Number of misses:   258
+ Number of false alarms:   574
+ Total number of errors:   832
+ Total cost of errors:   1090
+ Success rate when predicting  more than 0.50 :   0.561
+ Success rate when predicting  NOT  more than 0.50 :   0.872
+ Number of records with no relevant rules:   0
+ Average cost (per record):   0.328
+ Expected average cost (per record):    0.596
+ Improvement Factor:   1.818 (0.596 / 0.328)
+
+ LIST OF THE FIELDS
+
+ No.	Field Name	Field Type	Analyze if Empty	Ignore Field	
+ 1.	leave_ind      	Number			
+ 2.	fictive-ovedmiun	Number			
+ 3.	fictive2        	Number			
+ 4.	TeurGroupHscm  	Category			
+ 5.	vetek_months    	Number			
+ 6.	age            	Number			
+ 7.	gender          	Category			
+ 8.	EMP_Matzav_Mish...	Category			
+ 9.	distance_to_work	Number			
+ 10.	Yishuv          	Category			
+ 11.	Semel_Yishuv    	Number			
+ 12.	Seif            	Number			
+ 13.	Maamad          	Number			
+ 14.	tafkidCode      	Category			
+ 15.	manager_Code    	Category			
+ 16.	Tafkid          	Number			
+ 17.	Maneger        	Number			
+ 18.	Mahala          	Number			
+ 19.	Distance        	Number			
+ 20.	WorkHours      	Number			
+ 21.	Sahar          	Number			
+ 22.	MZV_Flag        	Number			
+ 23.	hedrut          	Number			
+ 24.	children        	Number			
+ 25.	avg_Payment    	Number			
+ 26.	stdevp_Payment  	Number			
+ 27.	Median_Payment  	Number			
+ 28.	change_in_salar...	Number			
+ 29.	avg_illness    	Number			
+ 30.	stdevp_illness  	Number			
+ 31.	Median_illness  	Number			
+ 32.	avg_omes        	Number			
+ 33.	stdevp_omes    	Number			
+ 34.	Median_omes    	Number			
+ 35.	count_managers  	Number			
+ 36.	F36            	Category			

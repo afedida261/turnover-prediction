@@ -1,0 +1,82 @@
+
+================================================================================
+EMPLOYEE TURNOVER PREDICTION
+================================================================================
+Dataset:          first_file
+Random seed:      42
+Split type:       random 60/20/20
+
+Target distribution:
+  Stayed (0): 795 (54.0%)
+  Left   (1): 677 (46.0%)
+
+Data split:
+  Training:      882
+  Validation:    295
+  Test:          295
+
+================================================================================
+MODEL COMPARISON
+================================================================================
+              Model Val AUC Test AUC Val F1 Test F1 Prec@20% Rec@20% Rec@50% Base Rate Avg Err Err Cost Impr Factor
+            XGBoost  0.9775   0.9737 0.9000  0.9254   1.0000  0.4338  0.9265    0.4610  0.2373   0.6901      2.9083
+           AdaBoost  0.9744   0.9677 0.8736  0.8897   1.0000  0.4338  0.9118    0.4610  0.4228   0.6901      1.6323
+           Ensemble  0.9718   0.9667 0.9167  0.9011   1.0000  0.4338  0.9191    0.4610  0.3081   0.6901      2.2401
+      Random Forest  0.9540   0.9542 0.8682  0.8947   1.0000  0.4338  0.9118    0.4610  0.3040   0.6901      2.2704
+         Neural Net  0.8805   0.8797 0.7889  0.7751   0.9322  0.4044  0.8015    0.4610  0.4382   0.6901      1.5749
+Logistic Regression  0.8700   0.8766 0.7729  0.7677   0.9153  0.3971  0.8088    0.4610  0.4441   0.6901      1.5539
+
+Best Model: XGBoost (Val AUC: 0.9775)
+
+================================================================================
+FEATURE IMPORTANCE — XGBoost
+================================================================================
+Method: SHAP (mean |SHAP|)
+
+  Rank  Feature                                          Score
+  ------------------------------------------------------------
+  1     Tenure Variability                              2.5082
+  2     Manager Code                                    0.9313
+  3     Manager Code Avg                                0.8372
+  4     Tenure Trend                                    0.5820
+  5     Salary Avg (Mean)                               0.4347
+  6     Avg Salary (12m)                                0.4218
+  7     Role Code                                       0.3890
+  8     Workload Distribution Skewness                  0.3357
+  9     Salary StdDev Avg                               0.3339
+  10    distance_to_work_mean                           0.3297
+  11    Role Code Avg                                   0.3151
+  12    Workload StdDev Avg                             0.3004
+  13    Age                                             0.2804
+  14    Tenure Avg (Months)                             0.2611
+  15    Tenure (Months)                                 0.2597
+
+================================================================================
+PREDICTIVE UNCERTAINTY (bootstrap posterior)
+================================================================================
+Method: refit the best model on B bootstrap resamples of the training
+set; each refit is an approximate draw from the posterior over models.
+The spread of predicted probabilities across refits approximates the
+posterior predictive distribution at each test point.
+
+  B (bootstrap refits):                 20
+  Test points:                          295
+  Mean posterior std (per prediction):  0.0744
+  Median posterior std:                 0.0060
+  Mean 95% CI width:                    0.2289
+  Median 95% CI width:                  0.0186
+  Decisive predictions (95% CI one-sided of 0.5):  76.3%
+
+================================================================================
+OUTPUT FILES & RISK DISTRIBUTION
+================================================================================
+Predictions Excel: output\predictions_first_file.xlsx
+Unique employees:  1472
+
+Risk distribution:
+  Low Risk            794  (53.9%)
+  Very High Risk      649  (44.1%)
+  Medium Risk          17  (1.2%)
+  High Risk            12  (0.8%)
+Model pipeline:    artifacts\model_pipeline_first_file_random.pkl
+

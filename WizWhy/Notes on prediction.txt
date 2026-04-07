@@ -1,0 +1,23 @@
+Notes on prediction:
+- retrained ML on a 70/30 train-test split
+- used same split on WizWhy
+- number of conditions in a rule: <= 3
+- min probability of IF-THEN rules: 0.45
+- min probability of IF-THEN-NOT rules: 0.82
+- min # cases for a rule: 50
+- predicted value > 0.5
+- cost of miss = 2, cost of false alarm = 1
+- no min power
+
+-> WizWhy and ml both use same data for training and prediction
+
+results in 'comparison_results.xslx'
+
+          AUC-ROC      F1  Precision  Recall  Recall@Top20%  Precision@Top20%
+System
+WizWhy     0.7480  0.6786     0.6204  0.7488         0.3300            0.7614
+ML Model   0.9724  0.8872     0.9031  0.8719         0.4335            1.0000
+
+
+
+ 
