@@ -1,6 +1,6 @@
 import pandas as pd
 import numpy as np
-from sklearn.metrics import roc_auc_score, f1_score, precision_score, recall_score
+from sklearn.metrics import roc_auc_score, f1_score, precision_score, recall_score, log_loss
 
 class Evaluator:
     def __init__(self):
@@ -57,9 +57,6 @@ class Evaluator:
         # Calculate Precision @ Top 20% (Hit Rate in the top bucket)
         precision_at_top_20 = captured_churners / top_20_count if top_20_count > 0 else 0.0
 
-        # Calculate Precision @ Top 20% (Hit Rate in the top bucket)
-        precision_at_top_20 = captured_churners / top_20_count if top_20_count > 0 else 0.0
-
         metrics["Recall@Top20%"] = recall_at_top_20
         metrics["Max_Recall@Top20%"] = max_possible_recall
         metrics["Precision@Top20%"] = precision_at_top_20
@@ -71,8 +68,21 @@ class Evaluator:
         recall_at_top_50 = captured_50 / total_churners if total_churners > 0 else 0.0
         metrics["Recall@Top50%"] = recall_at_top_50
         
-        # Check if requirement is met (Precision@20% > 80% AND Recall@50% > 85%)
-        # Note: Using 80% precision as a strong indicator of ranking quality
-        metrics["Requirement_Met"] = (precision_at_top_20 >= 0.80) and (recall_at_top_50 >= 0.85)
-        
+        # Improvement Factor (WizWhy-style)
+        # Primary probability = base rate of positive class in y_test
+        # Expected error cost = log-loss when always predicting the base rate (baseline / no-skill)
+        # Avg error cost = log-loss of actual model predictions
+        # Improvement factor = expected_error_cost / avg_error_cost (WizWhy definition: > 1 is better)
+        eps = 1e-15
+        primary_prob = float(y_test.mean())
+        y_prob_clipped = np.clip(y_prob, eps, 1 - eps)
+        expected_error_cost = log_loss(y_test, np.full(len(y_test), np.clip(primary_prob, eps, 1 - eps)))
+        avg_error_cost = log_loss(y_test, y_prob_clipped)
+        improvement_factor = expected_error_cost / avg_error_cost if avg_error_cost > 0 else float('inf')
+
+        metrics["Primary_Probability"] = primary_prob
+        metrics["Avg_Error_Cost"] = avg_error_cost
+        metrics["Error_Cost"] = expected_error_cost
+        metrics["Improvement_Factor"] = improvement_factor
+
         return metrics

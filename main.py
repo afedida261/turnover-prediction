@@ -5,6 +5,7 @@ import pandas as pd
 import numpy as np
 import joblib
 from sklearn.model_selection import train_test_split
+from tqdm import tqdm
 
 # Add src to path
 sys.path.append(os.path.join(os.path.dirname(__file__), 'src'))
@@ -15,6 +16,26 @@ from src.models.nn_model import NeuralNetTurnover
 from src.models.nn_advanced import RegularizedMLPTurnover
 from src.evaluator import Evaluator
 from src.config import TARGET_COL, FEATURE_DESCRIPTIONS, set_seed
+
+
+class Reporter:
+    """Writes lines to the results text file. Terminal stays clean for tqdm."""
+    def __init__(self, path):
+        self._file = open(path, 'w', encoding='utf-8')
+        self.path = path
+
+    def write(self, line=""):
+        self._file.write(line + "\n")
+        self._file.flush()
+
+    def section(self, title):
+        self.write("")
+        self.write("=" * 80)
+        self.write(title)
+        self.write("=" * 80)
+
+    def close(self):
+        self._file.close()
 
 
 def normalize_employee_id(value):
@@ -30,57 +51,112 @@ def normalize_employee_id(value):
         pass
     return value_str
 
-def get_feature_importance(model, feature_names, top_n=15):
-    """Extract and format feature importance from model."""
+
+def get_native_feature_importance(model, feature_names, top_n=15):
+    """Fallback: extract and format native feature importance from model."""
     try:
         importance_dict = model.get_feature_importance()
-        
+
         if isinstance(importance_dict, dict):
-            # Handle XGBoost's generic feature names (f0, f1, f2, etc.)
-            # Map them back to actual feature names
             mapped_dict = {}
             for key, value in importance_dict.items():
                 if key.startswith('f') and key[1:].isdigit():
-                    # This is a generic XGBoost feature name like "f0", "f1"
                     idx = int(key[1:])
                     if idx < len(feature_names):
                         mapped_dict[feature_names[idx]] = value
                     else:
                         mapped_dict[key] = value
                 else:
-                    # Keep original key if it's not a generic name
                     mapped_dict[key] = value
-            
-            # Sort by importance value
             sorted_importance = sorted(mapped_dict.items(), key=lambda x: abs(x[1]), reverse=True)
         else:
-            # If array, convert to dict
             sorted_importance = sorted(zip(feature_names, importance_dict), key=lambda x: abs(x[1]), reverse=True)
-        
+
         return sorted_importance[:top_n]
-    except Exception as e:
-        print(f"Could not extract feature importance: {e}")
+    except Exception:
         return None
 
-def get_prediction_confidence(y_prob):
+
+def compute_feature_importance(model, model_name, X, feature_names, top_n=15):
     """
-    Calculate confidence metrics for predictions.
-    Confidence is based on how far the probability is from 0.5 (uncertainty point).
+    Prefer SHAP for interpretability. Fall back to the model's native
+    feature importance for neural-net models (or if SHAP fails).
+    Returns (list of (feature, score), method_label).
     """
-    # Convert to numpy if needed
-    if hasattr(y_prob, 'values'):
-        y_prob = y_prob.values
-    
-    # Confidence = distance from 0.5, scaled to 0-1
-    confidence = np.abs(y_prob - 0.5) * 2
-    
+    is_nn = 'Neural Net' in model_name or 'MLP' in model_name
+    if not is_nn:
+        try:
+            from src.analysis.shap_explainability import compute_shap_summary
+            shap_df = compute_shap_summary(model, X, feature_names, top_n=top_n)
+            pairs = list(zip(shap_df['Feature'].tolist(), shap_df['Mean_Abs_SHAP'].tolist()))
+            return pairs, "SHAP (mean |SHAP|)"
+        except Exception as e:
+            native = get_native_feature_importance(model, feature_names, top_n=top_n)
+            if native is not None:
+                return native, f"native (SHAP failed: {type(e).__name__})"
+            return None, None
+
+    native = get_native_feature_importance(model, feature_names, top_n=top_n)
+    if native is not None:
+        return native, "native (NN fallback)"
+    return None, None
+
+
+def bootstrap_predictive_uncertainty(model_builder, X_train, y_train, X_test,
+                                     n_bootstrap=20, seed=42, progress_desc="Bootstrap"):
+    """
+    Bootstrap-based Bayesian-style predictive uncertainty.
+
+    Refits the model on n_bootstrap bootstrap samples of the training data
+    and collects predicted probabilities on X_test. Each bootstrap is an
+    approximate draw from the posterior over models, so the spread across
+    bootstraps approximates the posterior predictive distribution per sample.
+
+    Returns: dict with mean, std, lo (2.5%), hi (97.5%) arrays of length n_test,
+             plus summary stats.
+    """
+    rng = np.random.RandomState(seed)
+    n = len(X_train)
+    X_train_r = X_train.reset_index(drop=True)
+    y_train_r = y_train.reset_index(drop=True)
+
+    all_probs = []
+    for _ in tqdm(range(n_bootstrap), desc=progress_desc, leave=False):
+        idx = rng.choice(n, size=n, replace=True)
+        X_b = X_train_r.iloc[idx]
+        y_b = y_train_r.iloc[idx]
+        m = model_builder()
+        m.fit(X_b, y_b)
+        p = m.predict_proba(X_test)
+        if hasattr(p, 'ndim') and p.ndim == 2 and p.shape[1] == 2:
+            p = p[:, 1]
+        all_probs.append(np.asarray(p).ravel())
+
+    arr = np.vstack(all_probs)  # (B, n_test)
+    mean = arr.mean(axis=0)
+    std = arr.std(axis=0)
+    lo = np.percentile(arr, 2.5, axis=0)
+    hi = np.percentile(arr, 97.5, axis=0)
+    ci_width = hi - lo
+
+    # A prediction is "decisive" if the 95% credible interval stays on one
+    # side of the 0.5 decision boundary.
+    decisive = ((lo > 0.5) | (hi < 0.5)).mean() * 100
+
     return {
-        'mean_confidence': np.mean(confidence),
-        'median_confidence': np.median(confidence),
-        'min_confidence': np.min(confidence),
-        'max_confidence': np.max(confidence),
-        'high_confidence_pct': np.mean(confidence > 0.7) * 100,  # % with >70% confidence
-        'low_confidence_pct': np.mean(confidence < 0.3) * 100,   # % with <30% confidence
+        'mean': mean,
+        'std': std,
+        'lo': lo,
+        'hi': hi,
+        'ci_width': ci_width,
+        'n_bootstrap': n_bootstrap,
+        'summary': {
+            'mean_posterior_std': float(std.mean()),
+            'median_posterior_std': float(np.median(std)),
+            'mean_ci_width': float(ci_width.mean()),
+            'median_ci_width': float(np.median(ci_width)),
+            'decisive_pct': float(decisive),
+        }
     }
 
 def main():
@@ -94,23 +170,33 @@ def main():
     parser.add_argument('--split_file', type=str, default=None,
                         help="Path to split directory containing train_ids.txt and test_ids.txt. "
                              "If provided, uses fixed employee-ID-based split instead of random split.")
+    parser.add_argument('--results_path', type=str, default=None,
+                        help="Path for the output results text file. Defaults to output/results_{dataset}.txt")
 
     args = parser.parse_args()
-    
+
+    # Derive dataset tag early so we can set default paths
+    dataset_tag = os.path.splitext(os.path.basename(args.data_path))[0]
+    if not args.results_path:
+        args.results_path = os.path.join('output', f'results_{dataset_tag}.txt')
+
+    reporter = Reporter(args.results_path)
+    report = reporter.write
+
     # Set seed for reproducibility
     set_seed(args.seed)
-    print(f"Random seed set to: {args.seed}")
-    
-    # 1. Data Handling
-    print("="*80)
-    print("EMPLOYEE TURNOVER PREDICTION")
-    print("="*80)
-    
+
+    # ----- 1. Data Handling -----
+    reporter.section("EMPLOYEE TURNOVER PREDICTION")
+    report(f"Dataset:          {dataset_tag}")
+    report(f"Random seed:      {args.seed}")
+    report(f"Split type:       {'fixed (' + args.split_file + ')' if args.split_file else 'random 60/20/20'}")
+
     if not os.path.exists(args.data_path):
+        reporter.close()
         print(f"Error: Data file not found at {args.data_path}")
         return
 
-    dataset_tag = os.path.splitext(os.path.basename(args.data_path))[0]
     dataset_config_map = {
         'first_file': {'employee_id_col': 'fictive2', 'time_col': 'fictive-ovedmiun'},
         'factory_two': {'employee_id_col': 'fictive-oved', 'time_col': None},
@@ -119,36 +205,34 @@ def main():
 
     if not args.output_path:
         args.output_path = os.path.join('output', f'predictions_{dataset_tag}.xlsx')
-    
-    # 2. Loading & Preprocessing
-    print("\n[1] Loading and preprocessing data...")
-    print("-"*40)
+
+    # ----- 2. Loading & Preprocessing -----
+    print(f"Loading and preprocessing {dataset_tag}...")
     loader = RealExcelDataLoader(args.data_path, **dataset_config)
     df_raw = loader.load()
     df = loader.preprocess(df_raw)
-    
-    # Get feature names for reporting
     feature_names = loader.get_feature_names()
-    
-    # 3. Split Data
+
     if TARGET_COL not in df.columns:
+        reporter.close()
         print(f"Error: Target column '{TARGET_COL}' not found in data.")
         return
 
     X = df.drop(columns=[TARGET_COL])
     y = df[TARGET_COL]
-    
-    print(f"\nTarget distribution:")
-    print(f"  - Stayed (0): {(y==0).sum()} ({(y==0).mean()*100:.1f}%)")
-    print(f"  - Left (1): {(y==1).sum()} ({(y==1).mean()*100:.1f}%)")
-    
-    # Split into train/test
+
+    report("")
+    report("Target distribution:")
+    report(f"  Stayed (0): {(y==0).sum()} ({(y==0).mean()*100:.1f}%)")
+    report(f"  Left   (1): {(y==1).sum()} ({(y==1).mean()*100:.1f}%)")
+
+    # ----- 3. Split Data -----
     if args.split_file:
-        # --- Fixed split based on employee IDs from create_split.py ---
         train_ids_path = os.path.join(args.split_file, "train_ids.txt")
         test_ids_path = os.path.join(args.split_file, "test_ids.txt")
 
         if not os.path.exists(train_ids_path) or not os.path.exists(test_ids_path):
+            reporter.close()
             print(f"Error: Could not find train_ids.txt / test_ids.txt in {args.split_file}")
             return
 
@@ -157,23 +241,16 @@ def main():
         with open(test_ids_path) as f:
             test_ids = set(normalize_employee_id(line.strip()) for line in f if line.strip())
 
-        # kept_employee_ids aligns 1-to-1 with X rows after aggregation
         kept_ids = [normalize_employee_id(eid) for eid in loader.get_kept_indices()]
-
         train_mask = [eid in train_ids for eid in kept_ids]
-        test_mask  = [eid in test_ids  for eid in kept_ids]
+        test_mask = [eid in test_ids for eid in kept_ids]
 
         X_train = X[train_mask]
         y_train = y[train_mask]
-        X_test  = X[test_mask]
-        y_test  = y[test_mask]
-        X_val, y_val = X_test, y_test  # use test as validation for best-model selection
-
-        print(f"\nData Split (fixed, from {args.split_file}):")
-        print(f"  - Training: {len(X_train)} samples ({len(X_train)/len(X)*100:.1f}%)")
-        print(f"  - Test:     {len(X_test)} samples ({len(X_test)/len(X)*100:.1f}%)")
+        X_test = X[test_mask]
+        y_test = y[test_mask]
+        X_val, y_val = X_test, y_test
     else:
-        # --- Default random 60/20/20 split ---
         X_temp, X_test, y_temp, y_test = train_test_split(
             X, y, test_size=0.2, random_state=args.seed, stratify=y
         )
@@ -181,129 +258,158 @@ def main():
             X_temp, y_temp, test_size=0.25, random_state=args.seed, stratify=y_temp
         )
 
-        print(f"\nData Split (random 60/20/20):")
-        print(f"  - Training:   {len(X_train)} samples ({len(X_train)/len(X)*100:.1f}%)")
-        print(f"  - Validation: {len(X_val)} samples ({len(X_val)/len(X)*100:.1f}%)")
-        print(f"  - Test:       {len(X_test)} samples ({len(X_test)/len(X)*100:.1f}%)")
+    report("")
+    report("Data split:")
+    report(f"  Training:   {len(X_train):>6d}")
+    report(f"  Validation: {len(X_val):>6d}")
+    report(f"  Test:       {len(X_test):>6d}")
 
-    # Store test indices for output mapping
-    test_indices = X_test.index
-    
-    # 4. Model Definition
-    print("\n[2] Training and Evaluating Models...")
-    print("-"*40)
-    
-    models = {
-        "Logistic Regression": LogisticRegressionTurnover(class_weight='balanced', max_iter=1000),
-        "Random Forest": RandomForestTurnover(n_estimators=200, class_weight='balanced', max_depth=15),
-        "XGBoost": XGBoostTurnover(
-            use_label_encoder=False, 
+    # ----- 4. Model Builders -----
+    # Use builders (callables) so we can re-instantiate for bootstrap uncertainty.
+    scale_pos_weight = len(y[y == 0]) / len(y[y == 1])
+    model_builders = {
+        "Logistic Regression": lambda: LogisticRegressionTurnover(class_weight='balanced', max_iter=1000),
+        "Random Forest": lambda: RandomForestTurnover(n_estimators=200, class_weight='balanced', max_depth=15),
+        "XGBoost": lambda: XGBoostTurnover(
+            use_label_encoder=False,
             eval_metric='logloss',
-            scale_pos_weight=len(y[y==0])/len(y[y==1]),  # Handle imbalance
+            scale_pos_weight=scale_pos_weight,
             max_depth=6,
-            n_estimators=200
+            n_estimators=200,
         ),
-        "AdaBoost": AdaBoostTurnover(n_estimators=200, learning_rate=0.5),
-        "Ensemble": EnsembleTurnover(),
-        "Neural Net": NeuralNetTurnover(epochs=100, batch_size=32, learning_rate=0.001),
-        "Deep MLP (Regularized)": RegularizedMLPTurnover(epochs=150, batch_size=32, lr=0.001, n_folds=5),
+        "AdaBoost": lambda: AdaBoostTurnover(n_estimators=200, learning_rate=0.5),
+        "Ensemble": lambda: EnsembleTurnover(),
+        "Neural Net": lambda: NeuralNetTurnover(epochs=100, batch_size=32, learning_rate=0.001),
+        "Deep MLP (Regularized)": lambda: RegularizedMLPTurnover(epochs=150, batch_size=32, lr=0.001, n_folds=5),
     }
-    
+
     evaluator = Evaluator()
     results = []
     best_model = None
-    best_auc = 0
     best_model_name = "None"
-    
-    for name, model in models.items():
-        print(f"\n--- {name} ---")
-        
-        # Fit
+    best_auc = 0.0
+
+    # Suppress noisy model-internal prints during training
+    import io, contextlib
+
+    pbar = tqdm(model_builders.items(), desc="Training models", unit="model")
+    for name, builder in pbar:
+        pbar.set_description(f"Training {name:25s}")
         try:
-            model.fit(X_train, y_train)
+            model = builder()
+            with contextlib.redirect_stdout(io.StringIO()):
+                model.fit(X_train, y_train)
         except Exception as e:
-            print(f"Error training {name}: {e}")
+            tqdm.write(f"  [skip] {name}: {e}")
             continue
-        
-        # Evaluate on Validation set
+
         val_metrics = evaluator.evaluate(model, X_val, y_val)
-        print(f"  [Validation] AUC: {val_metrics['AUC_ROC']:.4f}, F1: {val_metrics['F1_Score']:.4f}")
-        
-        # Evaluate on Test set
         test_metrics = evaluator.evaluate(model, X_test, y_test)
-        print(f"  [Test]       AUC: {test_metrics['AUC_ROC']:.4f}, F1: {test_metrics['F1_Score']:.4f}")
-        print(f"  Recall@Top20%: {test_metrics['Recall@Top20%']:.4f} (Max: {test_metrics.get('Max_Recall@Top20%', 1.0):.4f})")
-        print(f"  Recall@Top50%: {test_metrics.get('Recall@Top50%', 0.0):.4f}")
-        print(f"  Precision@Top20%: {test_metrics.get('Precision@Top20%', 0.0):.4f}")
-        print(f"  Requirement Met: {'✓ YES' if test_metrics['Requirement_Met'] else '✗ NO'}")
-        print(f"    (Targets: Prec@20% >= 0.80, Recall@50% >= 0.85)")
-        
-        # Check for overfitting (validation vs test gap)
-        auc_gap = abs(val_metrics['AUC_ROC'] - test_metrics['AUC_ROC'])
-        if auc_gap > 0.05:
-            print(f"  ⚠ Warning: AUC gap of {auc_gap:.4f} suggests possible overfitting")
-        
-        # Track best model based on validation AUC
+
         if val_metrics['AUC_ROC'] > best_auc:
             best_auc = val_metrics['AUC_ROC']
             best_model = model
             best_model_name = name
-                
+
         test_metrics['Model'] = name
         test_metrics['Val_AUC'] = val_metrics['AUC_ROC']
         test_metrics['Val_F1'] = val_metrics['F1_Score']
         results.append(test_metrics)
+    pbar.close()
 
-    # 5. Feature Importance Analysis
-    print("\n[3] Feature Importance Analysis")
-    print("-"*40)
+    # ----- 5. Final results table -----
+    reporter.section("MODEL COMPARISON")
+    if results:
+        results_df = pd.DataFrame(results)
+        cols = ['Model', 'Val_AUC', 'AUC_ROC', 'Val_F1', 'F1_Score',
+                'Precision@Top20%', 'Recall@Top20%', 'Recall@Top50%',
+                'Primary_Probability', 'Avg_Error_Cost', 'Error_Cost', 'Improvement_Factor']
+        cols = [c for c in cols if c in results_df.columns]
+        display_df = results_df[cols].copy()
+        rename_map = {
+            'Model': 'Model',
+            'Val_AUC': 'Val AUC',
+            'AUC_ROC': 'Test AUC',
+            'Val_F1': 'Val F1',
+            'F1_Score': 'Test F1',
+            'Precision@Top20%': 'Prec@20%',
+            'Recall@Top20%': 'Rec@20%',
+            'Recall@Top50%': 'Rec@50%',
+            'Primary_Probability': 'Base Rate',
+            'Avg_Error_Cost': 'Avg Err',
+            'Error_Cost': 'Err Cost',
+            'Improvement_Factor': 'Impr Factor',
+        }
+        display_df = display_df.rename(columns=rename_map)
+        display_df = display_df.sort_values(by='Val AUC', ascending=False)
 
+        # Format floats to 4 decimals for the text table
+        float_cols = [c for c in display_df.columns if c != 'Model']
+        for c in float_cols:
+            display_df[c] = display_df[c].map(lambda v: f"{v:.4f}")
+
+        report(display_df.to_string(index=False))
+        report("")
+        report(f"Best Model: {best_model_name} (Val AUC: {best_auc:.4f})")
+    else:
+        report("No models were trained successfully.")
+
+    # ----- 6. Feature Importance (SHAP; fallback to native for NNs) -----
+    reporter.section(f"FEATURE IMPORTANCE — {best_model_name}")
     if best_model is not None:
-        print(f"\nTop features from best model ({best_model_name}) [Reference]:")
-        importance = get_feature_importance(best_model, X.columns.tolist())
-        
+        print("Computing feature importance...")
+        with contextlib.redirect_stdout(io.StringIO()):
+            importance, method = compute_feature_importance(
+                best_model, best_model_name, X_train, X.columns.tolist(), top_n=15
+            )
+
         if importance:
-            print("\n  Rank | Feature                              | Importance")
-            print("  " + "-"*60)
+            report(f"Method: {method}")
+            report("")
+            report(f"  {'Rank':<4}  {'Feature':<40}  {'Score':>12}")
+            report("  " + "-" * 60)
             for i, (feat, imp) in enumerate(importance, 1):
-                # Get readable name if available
-                readable = FEATURE_DESCRIPTIONS.get(feat, feat)
-                if readable is None:
-                    readable = feat
-                # Truncate long feature names
-                if len(readable) > 35:
-                    readable = readable[:32] + "..."
-                print(f"  {i:4d} | {readable:36s} | {imp:.4f}")
-    
-    # 6. Prediction Confidence
-    print("\n[4] Prediction Confidence Analysis")
-    print("-"*40)
-    
-    if best_model is not None:
-        y_prob_test = best_model.predict_proba(X_test)
-        confidence_metrics = get_prediction_confidence(y_prob_test)
-        
-        print(f"\n  Mean Confidence: {confidence_metrics['mean_confidence']*100:.1f}%")
-        print(f"  Median Confidence: {confidence_metrics['median_confidence']*100:.1f}%")
-        print(f"  High Confidence (>70%): {confidence_metrics['high_confidence_pct']:.1f}% of predictions")
-        print(f"  Low Confidence (<30%): {confidence_metrics['low_confidence_pct']:.1f}% of predictions")
-    
-    # 7. Generate Output with Predictions
-    print("\n[5] Generating Output File...")
-    print("-"*40)
-    
-    if best_model is not None:
-        # Get predictions for ALL processed data (not just test)
-        y_prob_all = best_model.predict_proba(X)
-        confidence_all = np.abs(y_prob_all - 0.5) * 2
-        
-        # Get the employee IDs that were kept after aggregation
-        kept_employee_ids = loader.get_kept_indices()
+                readable = FEATURE_DESCRIPTIONS.get(feat, feat) or feat
+                if len(readable) > 38:
+                    readable = readable[:35] + "..."
+                report(f"  {i:<4d}  {readable:<40}  {imp:>12.4f}")
+        else:
+            report("Feature importance unavailable for this model.")
 
+    # ----- 7. Bayesian-style Predictive Uncertainty (bootstrap posterior) -----
+    reporter.section("PREDICTIVE UNCERTAINTY (bootstrap posterior)")
+    if best_model is not None:
+        print("Estimating predictive uncertainty via bootstrap...")
+        with contextlib.redirect_stdout(io.StringIO()):
+            unc = bootstrap_predictive_uncertainty(
+                model_builders[best_model_name],
+                X_train, y_train, X_test,
+                n_bootstrap=20, seed=args.seed,
+                progress_desc=None,
+            )
+        s = unc['summary']
+        report("Method: refit the best model on B bootstrap resamples of the training")
+        report("set; each refit is an approximate draw from the posterior over models.")
+        report("The spread of predicted probabilities across refits approximates the")
+        report("posterior predictive distribution at each test point.")
+        report("")
+        report(f"  B (bootstrap refits):                 {unc['n_bootstrap']}")
+        report(f"  Test points:                          {len(unc['mean'])}")
+        report(f"  Mean posterior std (per prediction):  {s['mean_posterior_std']:.4f}")
+        report(f"  Median posterior std:                 {s['median_posterior_std']:.4f}")
+        report(f"  Mean 95% CI width:                    {s['mean_ci_width']:.4f}")
+        report(f"  Median 95% CI width:                  {s['median_ci_width']:.4f}")
+        report(f"  Decisive predictions (95% CI one-sided of 0.5):  {s['decisive_pct']:.1f}%")
+
+    # ----- 8. Generate output Excel + pickle -----
+    if best_model is not None:
+        y_prob_all = best_model.predict_proba(X)
+        confidence_all = np.abs(y_prob_all - 0.5) * 2  # kept for Excel compatibility
+
+        kept_employee_ids = loader.get_kept_indices()
         employee_id_col = dataset_config['employee_id_col']
         time_col = dataset_config['time_col']
-        
-        # Create output with most recent record per employee from raw data
+
         if time_col and time_col in df_raw.columns:
             output_df = (
                 df_raw
@@ -316,60 +422,49 @@ def main():
             output_df = df_raw.groupby(employee_id_col).last().reset_index()
 
         output_df = output_df[output_df[employee_id_col].isin(kept_employee_ids)].copy()
-        
-        # Sort by employee ID to match the order of predictions
         output_df = output_df.sort_values(employee_id_col).reset_index(drop=True)
-        
-        # Create a mapping from employee ID to prediction
+
         pred_df = pd.DataFrame({
             employee_id_col: kept_employee_ids,
             'turnover_prob': y_prob_all,
-            'prediction_confidence': confidence_all
+            'prediction_confidence': confidence_all,
         })
-        
-        # Merge predictions with output
+
         output_df = output_df.drop(columns=['turnover_prob'], errors='ignore')
         output_df = output_df.merge(pred_df, on=employee_id_col, how='left')
-        
-        # Add risk category
+
         output_df['risk_category'] = pd.cut(
-            output_df['turnover_prob'], 
+            output_df['turnover_prob'],
             bins=[0, 0.3, 0.5, 0.7, 1.0],
-            labels=['Low Risk', 'Medium Risk', 'High Risk', 'Very High Risk']
+            labels=['Low Risk', 'Medium Risk', 'High Risk', 'Very High Risk'],
         )
-        
-        # Rename columns using FEATURE_DESCRIPTIONS for better readability
-        # Create reverse mapping for output columns
+
         output_column_mapping = {
             'leave_ind': 'Left Company (Actual)',
             employee_id_col: 'Employee ID',
             'turnover_prob': 'Turnover Probability',
             'prediction_confidence': 'Prediction Confidence',
             'risk_category': 'Risk Category',
-            **FEATURE_DESCRIPTIONS  # Include all feature descriptions
+            **FEATURE_DESCRIPTIONS,
         }
         if time_col and time_col in output_df.columns:
             output_column_mapping[time_col] = 'Record Index'
-        
-        # Apply column renaming
+
         output_df = output_df.rename(columns=output_column_mapping)
-        
-        # Sort by turnover probability (highest risk first)
         output_df = output_df.sort_values('Turnover Probability', ascending=False)
-        
-        # Save to Excel
+
         os.makedirs(os.path.dirname(args.output_path), exist_ok=True)
         output_df.to_excel(args.output_path, index=False)
-        print(f"\n  Output saved to: {args.output_path}")
-        print(f"  Total unique employees: {len(output_df)}")
-        
-        # Risk distribution
-        print("\n  Risk Distribution:")
+
+        reporter.section("OUTPUT FILES & RISK DISTRIBUTION")
+        report(f"Predictions Excel: {args.output_path}")
+        report(f"Unique employees:  {len(output_df)}")
+        report("")
+        report("Risk distribution:")
         risk_dist = output_df['Risk Category'].value_counts()
         for risk, count in risk_dist.items():
-            print(f"    - {risk}: {count} ({count/len(output_df)*100:.1f}%)")
+            report(f"  {risk:<16s} {count:>6d}  ({count/len(output_df)*100:.1f}%)")
 
-        # Save model pipeline artifact
         os.makedirs('artifacts', exist_ok=True)
         pipeline = {
             'model': best_model,
@@ -378,33 +473,16 @@ def main():
             'dataset_tag': dataset_tag,
             'dataset_config': dataset_config,
             'split_type': 'fixed' if args.split_file else 'random',
-            'split_file': args.split_file
+            'split_file': args.split_file,
         }
-
-        # Determine artifact filename based on split type
         split_type = 'fixed' if args.split_file else 'random'
         artifact_path = os.path.join('artifacts', f'model_pipeline_{dataset_tag}_{split_type}.pkl')
-
         joblib.dump(pipeline, artifact_path)
-        print(f"\n  Saved model pipeline artifact to {artifact_path}")
+        report(f"Model pipeline:    {artifact_path}")
 
-    # 8. Summary
-    print("\n" + "="*80)
-    print("FINAL RESULTS SUMMARY")
-    print("="*80)
-    
-    if results:
-        results_df = pd.DataFrame(results)
-        cols = ['Model', 'Val_AUC', 'AUC_ROC', 'Val_F1', 'F1_Score', 'Recall@Top20%', 'Requirement_Met']
-        cols = [c for c in cols if c in results_df.columns]
-        # Rename for display
-        display_df = results_df[cols].copy()
-        display_df.columns = ['Model', 'Val AUC', 'Test AUC', 'Val F1', 'Test F1', 'Recall@20%', 'Req Met']
-        print(display_df.sort_values(by='Val AUC', ascending=False).to_string(index=False))
-        
-        print(f"\n✓ Best Model: {best_model_name} (Val AUC: {best_auc:.4f})")
-    else:
-        print("No models were trained successfully.")
+    report("")
+    reporter.close()
+    print(f"Done. Results saved to: {args.results_path}")
 
 if __name__ == "__main__":
     main()

@@ -13,11 +13,12 @@ venv/
 data/
 
 # Generated outputs (large, not tracked)
-output/
+output/*.xlsx
 artifacts/
 
 # WizWhy generated files (not tracked)
-WizWhy/
+WizWhy/*.xlsx
+WizWhy/*.pdf
 
 # Split: ignore large Excel files but track deterministic ID files
 split/*.xlsx
