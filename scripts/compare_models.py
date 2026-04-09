@@ -33,11 +33,10 @@ from src.config import TARGET_COL
 from src.evaluator import Evaluator
 
 # Paths
-DATA_PATH = os.path.join("data", "first_file.xlsx")
-RANDOM_MODEL_PATH = os.path.join("artifacts", "model_pipeline_random.pkl")
-SPLIT_MODEL_PATH = os.path.join("artifacts", "model_pipeline_split.pkl")
-SPLIT_DIR = "split"
-TEST_IDS_PATH = os.path.join(SPLIT_DIR, "test_ids.txt")
+DATA_PATH = os.path.join("data", "first_file", "first_file.xlsx")
+RANDOM_MODEL_PATH = os.path.join("artifacts", "model_pipeline_first_file_random.pkl")
+SPLIT_MODEL_PATH = os.path.join("artifacts", "model_pipeline_first_file_fixed.pkl")
+TEST_DATA_PATH = os.path.join("data", "first_file", "test_data.xlsx")
 COMPARISON_OUTPUT = os.path.join("output", "model_comparison.xlsx")
 
 
@@ -94,9 +93,9 @@ def main():
         print("  Run: python main.py --split_file split/")
         return
 
-    if not os.path.exists(TEST_IDS_PATH):
-        print(f"Error: Test IDs not found at {TEST_IDS_PATH}")
-        print("  Run: python scripts/create_split.py")
+    if not os.path.exists(TEST_DATA_PATH):
+        print(f"Error: Test data not found at {TEST_DATA_PATH}")
+        print("  Please ensure test_data.xlsx exists in data folder.")
         return
 
     # Load models
@@ -127,9 +126,10 @@ def main():
     df_raw = loader.load()
     df = loader.preprocess(df_raw)
 
-    # Load test IDs
-    with open(TEST_IDS_PATH) as f:
-        test_ids = set(line.strip() for line in f if line.strip())
+    # Load test IDs from test_data.xlsx
+    test_df = pd.read_excel(TEST_DATA_PATH)
+    EMPLOYEE_COL = 'fictive2' if 'fictive2' in test_df.columns else 'fictive-oved'
+    test_ids = set(test_df[EMPLOYEE_COL].astype(float).astype(int).astype(str))
 
     # Filter to test set
     kept_ids = [str(int(float(eid))) for eid in loader.get_kept_indices()]

@@ -40,7 +40,7 @@ def set_seed(seed=42):
 TARGET_COL = 'leave_ind'  # 1 = left in last year, 0 = stayed
 
 # ID columns - to be excluded from features
-ID_COLUMNS = ['fictive-ovedmiun', 'fictive2']
+ID_COLUMNS = ['fictive-ovedmiun', 'fictive2', 'fictive-oved']
 
 # Output column - should be replaced by model predictions
 OUTPUT_COLUMN = 'turnover_prob'

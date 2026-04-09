@@ -107,37 +107,60 @@ st.markdown("""
 st.title("Executive Turnover Dashboard")
 
 # ---------------------------------------------------------------------------
-# Data Loading & Initialization
+# Dynamic Dataset Selection & Caching
 # ---------------------------------------------------------------------------
-# DATA_PATH = "output/predictions_output.xlsx"
-DATA_PATH = "output/predictions_output_v4.xlsx"
-RAW_DATA_PATH = "data/first_file.xlsx"
+
+st.sidebar.title("🗂️ Configuration")
+data_dir = "data"
+if os.path.exists(data_dir):
+    datasets = sorted([d for d in os.listdir(data_dir) if os.path.isdir(os.path.join(data_dir, d))])
+else:
+    datasets = []
+
+if not datasets:
+    st.error("No dataset directories (like 'first_file') found in data/")
+    st.stop()
+
+selected_dataset = st.sidebar.selectbox("Select Dataset", datasets)
+
+DATA_PATH = f"output/predictions_{selected_dataset}.xlsx"
+dataset_folder = os.path.join("data", selected_dataset)
+raw_files = [f for f in os.listdir(dataset_folder) if not f.startswith("train_") and not f.startswith("test_") and f.endswith(".xlsx")]
+RAW_DATA_PATH = os.path.join(dataset_folder, raw_files[0]) if raw_files else ""
+
+fixed_model = f"artifacts/model_pipeline_{selected_dataset}_fixed.pkl"
+random_model = f"artifacts/model_pipeline_{selected_dataset}_random.pkl"
+API_PATH = fixed_model if os.path.exists(fixed_model) else random_model
+
 
 @st.cache_data
-def load_dashboard_data(filepath: str = DATA_PATH) -> pd.DataFrame:
+def load_dashboard_data(filepath: str) -> pd.DataFrame:
     if not os.path.exists(filepath):
         return pd.DataFrame()
     return pd.read_excel(filepath)
 
 @st.cache_data
-def load_raw_data(filepath: str = RAW_DATA_PATH) -> pd.DataFrame:
+def load_raw_data(filepath: str) -> pd.DataFrame:
     if not os.path.exists(filepath):
         return pd.DataFrame()
     return pd.read_excel(filepath)
 
 @st.cache_resource
-def load_inference_api():
+def load_inference_api(api_path: str):
     try:
-        return TurnoverInferenceAPI()
+        if os.path.exists(api_path):
+            from src.inference import TurnoverInferenceAPI
+            return TurnoverInferenceAPI(api_path)
+        return None
     except Exception as e:
         return None
 
-dashboard_df = load_dashboard_data()
-raw_df = load_raw_data()
-api = load_inference_api()
+dashboard_df = load_dashboard_data(DATA_PATH)
+raw_df = load_raw_data(RAW_DATA_PATH)
+api = load_inference_api(API_PATH)
 
 if dashboard_df.empty:
-    st.error(f"Data file **{DATA_PATH}** not found. Please run `python main.py` first.")
+    st.error(f"Predictions file **{DATA_PATH}** not found. Please run `python main.py` and select `{selected_dataset}` first.")
     st.stop()
 
 
@@ -496,10 +519,11 @@ with tab_micro:
     st.markdown("Select an employee to view their current profile and simulate how changes to key factors affect their turnover risk.")
     
     if raw_df.empty or api is None:
-        st.warning("Raw data or model not properly loaded. Missing `data/first_file.xlsx` or `artifacts/model_pipeline.pkl`. Please run `python main.py` first.")
+        st.warning(f"Raw data or model not properly loaded for `{selected_dataset}`. Missing `{RAW_DATA_PATH}` or `{API_PATH}`. Please run `python main.py` first.")
     else:
-        employee_id_col = 'fictive2'
-        time_col = 'fictive-ovedmiun'
+        dataset_config = api.pipeline.get('dataset_config', {})
+        employee_id_col = dataset_config.get('employee_id_col', 'fictive2')
+        time_col = dataset_config.get('time_col')
         
         valid_employees = sorted(dashboard_df["Employee ID"].unique())
         
@@ -509,7 +533,7 @@ with tab_micro:
         if selected_emp_id:
             # 1. Employee Data Setup
             emp_records = raw_df[raw_df[employee_id_col] == selected_emp_id].copy()
-            if time_col in emp_records.columns:
+            if time_col and time_col in emp_records.columns:
                 emp_records = emp_records.sort_values(time_col)
                 
             latest_record = emp_records.iloc[-1].copy()

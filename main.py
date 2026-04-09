@@ -161,22 +161,57 @@ def bootstrap_predictive_uncertainty(model_builder, X_train, y_train, X_test,
 
 def main():
     parser = argparse.ArgumentParser(description="Turnover Prediction Pipeline")
-    parser.add_argument('--data_path', type=str, default='data/first_file.xlsx',
-                        help="Path to the Excel data file")
+    parser.add_argument('--data_path', type=str, default=None,
+                        help="Path to the Excel data file. If not provided, will prompt interactively.")
     parser.add_argument('--output_path', type=str, default=None,
                         help="Path for output predictions file. Defaults to output/predictions_{dataset}.xlsx")
     parser.add_argument('--seed', type=int, default=42,
                         help="Random seed for reproducibility")
-    parser.add_argument('--split_file', type=str, default=None,
-                        help="Path to split directory containing train_ids.txt and test_ids.txt. "
-                             "If provided, uses fixed employee-ID-based split instead of random split.")
     parser.add_argument('--results_path', type=str, default=None,
                         help="Path for the output results text file. Defaults to output/results_{dataset}.txt")
 
     args = parser.parse_args()
 
-    # Derive dataset tag early so we can set default paths
-    dataset_tag = os.path.splitext(os.path.basename(args.data_path))[0]
+    if not args.data_path:
+        data_dir = "data"
+        if not os.path.exists(data_dir):
+            print("Error: data/ directory not found!")
+            import sys
+            sys.exit(1)
+            
+        datasets = sorted([d for d in os.listdir(data_dir) if os.path.isdir(os.path.join(data_dir, d))])
+        if not datasets:
+            print("No dataset directories found in data/.")
+            import sys
+            sys.exit(1)
+            
+        print("\n" + "="*40)
+        print("Select Dataset for Training")
+        print("="*40)
+        for i, d in enumerate(datasets, 1):
+            print(f"  {i}. {d}")
+            
+        while True:
+            try:
+                choice = input(f"\nEnter the number of the dataset to train on [1-{len(datasets)}]: ")
+                choice_idx = int(choice) - 1
+                if 0 <= choice_idx < len(datasets):
+                    selected_dataset = datasets[choice_idx]
+                    dataset_folder = os.path.join(data_dir, selected_dataset)
+                    raw_files = [f for f in os.listdir(dataset_folder) if not f.startswith("train_") and not f.startswith("test_") and f.endswith(".xlsx")]
+                    if not raw_files:
+                        print(f"Error: No raw Excel file found in {dataset_folder}")
+                        import sys
+                        sys.exit(1)
+                    args.data_path = os.path.join(dataset_folder, raw_files[0])
+                    break
+                else:
+                    print("Invalid choice, try again.")
+            except ValueError:
+                print("Please enter a valid number.")
+
+    # Derive dataset tag dynamically based on the parent folder name
+    dataset_tag = os.path.basename(os.path.dirname(args.data_path))
     if not args.results_path:
         args.results_path = os.path.join('output', f'results_{dataset_tag}.txt')
 
@@ -187,10 +222,13 @@ def main():
     set_seed(args.seed)
 
     # ----- 1. Data Handling -----
+    dataset_dir = os.path.dirname(args.data_path)
+    using_preset_split = os.path.exists(os.path.join(dataset_dir, "train_data.xlsx")) and os.path.exists(os.path.join(dataset_dir, "test_data.xlsx"))
+    
     reporter.section("EMPLOYEE TURNOVER PREDICTION")
     report(f"Dataset:          {dataset_tag}")
     report(f"Random seed:      {args.seed}")
-    report(f"Split type:       {'fixed (' + args.split_file + ')' if args.split_file else 'random 60/20/20'}")
+    report(f"Split type:       {'preset (from data folder)' if using_preset_split else 'random 60/20/20'}")
 
     if not os.path.exists(args.data_path):
         reporter.close()
@@ -199,6 +237,7 @@ def main():
 
     dataset_config_map = {
         'first_file': {'employee_id_col': 'fictive2', 'time_col': 'fictive-ovedmiun'},
+        'second_file': {'employee_id_col': 'fictive-oved', 'time_col': None},
         'factory_two': {'employee_id_col': 'fictive-oved', 'time_col': None},
     }
     dataset_config = dataset_config_map.get(dataset_tag, dataset_config_map['first_file'])
@@ -227,19 +266,17 @@ def main():
     report(f"  Left   (1): {(y==1).sum()} ({(y==1).mean()*100:.1f}%)")
 
     # ----- 3. Split Data -----
-    if args.split_file:
-        train_ids_path = os.path.join(args.split_file, "train_ids.txt")
-        test_ids_path = os.path.join(args.split_file, "test_ids.txt")
+    if using_preset_split:
+        train_data_path = os.path.join(dataset_dir, "train_data.xlsx")
+        test_data_path = os.path.join(dataset_dir, "test_data.xlsx")
 
-        if not os.path.exists(train_ids_path) or not os.path.exists(test_ids_path):
-            reporter.close()
-            print(f"Error: Could not find train_ids.txt / test_ids.txt in {args.split_file}")
-            return
+        print(f"Using preset split from {dataset_dir}...")
+        train_df = pd.read_excel(train_data_path)
+        test_df = pd.read_excel(test_data_path)
 
-        with open(train_ids_path) as f:
-            train_ids = set(normalize_employee_id(line.strip()) for line in f if line.strip())
-        with open(test_ids_path) as f:
-            test_ids = set(normalize_employee_id(line.strip()) for line in f if line.strip())
+        emp_col = dataset_config['employee_id_col']
+        train_ids = set(normalize_employee_id(eid) for eid in train_df[emp_col])
+        test_ids = set(normalize_employee_id(eid) for eid in test_df[emp_col])
 
         kept_ids = [normalize_employee_id(eid) for eid in loader.get_kept_indices()]
         train_mask = [eid in train_ids for eid in kept_ids]
@@ -472,10 +509,10 @@ def main():
             'feature_names': loader.get_feature_names(),
             'dataset_tag': dataset_tag,
             'dataset_config': dataset_config,
-            'split_type': 'fixed' if args.split_file else 'random',
-            'split_file': args.split_file,
+            'split_type': 'fixed' if using_preset_split else 'random',
+            'use_preset_split': using_preset_split,
         }
-        split_type = 'fixed' if args.split_file else 'random'
+        split_type = 'fixed' if using_preset_split else 'random'
         artifact_path = os.path.join('artifacts', f'model_pipeline_{dataset_tag}_{split_type}.pkl')
         joblib.dump(pipeline, artifact_path)
         report(f"Model pipeline:    {artifact_path}")

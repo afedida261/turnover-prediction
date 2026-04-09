@@ -37,11 +37,10 @@ from src.analysis.shap_explainability import compute_shap_summary, SHAP_AVAILABL
 # Paths (relative to project root)
 # ---------------------------------------------------------------------------
 WIZWHY_PRED_PATH   = os.path.join("WizWhy", "wizwhy_test_results.txt")
-ML_PRED_PATH       = os.path.join("output", "predictions_output.xlsx")
-PIPELINE_PATH      = os.path.join("artifacts", "model_pipeline_split.pkl")  # Use split model (stratified 70/30)
-RAW_DATA_PATH      = os.path.join("data", "first_file.xlsx")
-SPLIT_DIR          = "split"
-TEST_IDS_PATH      = os.path.join(SPLIT_DIR, "test_ids.txt")
+ML_PRED_PATH       = os.path.join("output", "predictions_first_file.xlsx")
+PIPELINE_PATH      = os.path.join("artifacts", "model_pipeline_first_file_random.pkl")
+RAW_DATA_PATH      = os.path.join("data", "first_file", "first_file.xlsx")
+TEST_DATA_PATH     = os.path.join("data", "first_file", "test_data.xlsx")
 OUTPUT_PATH        = os.path.join("WizWhy", "comparison_results.xlsx")
 
 THRESHOLD          = 0.50
@@ -120,7 +119,8 @@ def main():
 
     ww = pd.read_csv(WIZWHY_PRED_PATH)
     ww.columns = ww.columns.str.strip().str.replace('"', '')
-    ww[EMPLOYEE_COL] = ww['fictive2'].astype(float).astype(int).astype(str)
+    ww_emp_col = 'fictive2' if 'fictive2' in ww.columns else 'fictive-oved'
+    ww[EMPLOYEE_COL] = ww[ww_emp_col].astype(float).astype(int).astype(str)
     ww['ww_prob'] = ww['Concl_Prob'].astype(float)
     ww['ww_actual'] = ww['leave_ind'].astype(float).astype(int)
 
@@ -147,14 +147,15 @@ def main():
     ml['ml_actual'] = ml['Left Company (Actual)'].astype(float).astype(int)
     ml = ml[[EMPLOYEE_COL, 'ml_actual', 'ml_prob']].drop_duplicates(EMPLOYEE_COL)
 
-    # Filter to test employees only (if split dir exists)
-    if os.path.exists(TEST_IDS_PATH):
-        with open(TEST_IDS_PATH) as f:
-            test_ids = set(line.strip() for line in f if line.strip())
+    # Filter to test employees only using test_data.xlsx
+    if os.path.exists(TEST_DATA_PATH):
+        test_df = pd.read_excel(TEST_DATA_PATH)
+        actual_emp_col = 'fictive2' if 'fictive2' in test_df.columns else 'fictive-oved'
+        test_ids = set(test_df[actual_emp_col].astype(float).astype(int).astype(str))
         ml = ml[ml[EMPLOYEE_COL].isin(test_ids)]
         print(f"ML predictions (test set only): {len(ml)} employees")
     else:
-        print(f"ML predictions loaded: {len(ml)} employees (no split filter — test_ids.txt not found)")
+        print(f"ML predictions loaded: {len(ml)} employees (test_data.xlsx not found)")
 
     # ------------------------------------------------------------------
     # 3. Inner join on employee ID
@@ -230,9 +231,10 @@ def main():
 
             # Filter to test employees for SHAP
             kept_ids = [str(int(float(eid))) for eid in loader.get_kept_indices()]
-            if os.path.exists(TEST_IDS_PATH):
-                with open(TEST_IDS_PATH) as f:
-                    test_ids = set(line.strip() for line in f if line.strip())
+            if os.path.exists(TEST_DATA_PATH):
+                test_df = pd.read_excel(TEST_DATA_PATH)
+                actual_emp_col = 'fictive2' if 'fictive2' in test_df.columns else 'fictive-oved'
+                test_ids = set(test_df[actual_emp_col].astype(float).astype(int).astype(str))
                 test_mask = [eid in test_ids for eid in kept_ids]
                 X_shap = X_all[test_mask]
             else:
