@@ -10,6 +10,7 @@ venv/
 # Data files (large, not tracked)
 *.csv
 *.pdf
+*.xlsx
 data/
 
 # Generated outputs (large, not tracked)

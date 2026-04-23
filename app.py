@@ -105,13 +105,14 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 st.title("Executive Turnover Dashboard")
+st.caption("ML training is available in a separate site: run `streamlit run ml_workbench_app.py`.")
 
 # ---------------------------------------------------------------------------
 # Data Loading & Initialization
 # ---------------------------------------------------------------------------
 # DATA_PATH = "output/predictions_output.xlsx"
-DATA_PATH = "output/predictions_output_v4.xlsx"
-RAW_DATA_PATH = "data/first_file.xlsx"
+DATA_PATH = "output/predictions_first_file.xlsx"
+RAW_DATA_PATH = "data/raw/first_file.xlsx"
 
 @st.cache_data
 def load_dashboard_data(filepath: str = DATA_PATH) -> pd.DataFrame:
@@ -265,6 +266,7 @@ def render_floating_chat_widget(dashboard_df: pd.DataFrame, raw_df: pd.DataFrame
         if st.button("Clear Chat", use_container_width=True, key="floating_clear_chat"):
             st.session_state.chat_messages = []
             st.rerun()
+
 
 # ---------------------------------------------------------------------------
 # Tabs Setup
