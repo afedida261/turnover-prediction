@@ -104,10 +104,14 @@ def compute_shap_summary(model, X: pd.DataFrame, feature_names: list, top_n: int
         # PermutationExplainer returns shap.Explanation object
         raw_out = explainer(X_sample)
         shap_values = raw_out.values
-        if isinstance(shap_values, np.ndarray) and shap_values.ndim == 3:
-            shap_values = shap_values[:, :, 1]
-
-    mean_abs_shap = np.abs(np.array(shap_values)).mean(axis=0)
+        
+    # Enforce 2D array: (samples, features)
+    shap_values = np.array(shap_values)
+    if shap_values.ndim == 3:
+        # Some SHAP versions return (samples, features, classes) for TreeExplainer
+        shap_values = shap_values[:, :, 1]
+        
+    mean_abs_shap = np.abs(shap_values).mean(axis=0)
 
     results = pd.DataFrame({
         'Feature': feature_names,

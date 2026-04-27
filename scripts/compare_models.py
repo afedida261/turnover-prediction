@@ -32,14 +32,6 @@ from src.data_loader import RealExcelDataLoader
 from src.config import TARGET_COL
 from src.evaluator import Evaluator
 
-# Paths
-DATA_PATH = os.path.join("data", "first_file", "first_file.xlsx")
-RANDOM_MODEL_PATH = os.path.join("artifacts", "model_pipeline_first_file_random.pkl")
-SPLIT_MODEL_PATH = os.path.join("artifacts", "model_pipeline_first_file_fixed.pkl")
-TEST_DATA_PATH = os.path.join("data", "first_file", "test_data.xlsx")
-COMPARISON_OUTPUT = os.path.join("output", "model_comparison.xlsx")
-
-
 def recall_at_top_k(y_true, y_score, k_frac=0.20):
     """Recall in top k% of population."""
     df = pd.DataFrame({'true': y_true, 'score': y_score}).sort_values('score', ascending=False)
@@ -82,6 +74,44 @@ def main():
     print("MODEL COMPARISON: Random Split vs Stratified Split")
     print("=" * 80)
 
+    data_dir = "data"
+    if not os.path.exists(data_dir):
+        print("Error: data/ directory not found!")
+        return
+        
+    datasets = sorted([d for d in os.listdir(data_dir) if os.path.isdir(os.path.join(data_dir, d))])
+    if not datasets:
+        print("No dataset directories found in data/.")
+        return
+        
+    print("\nSelect Dataset for Comparison")
+    print("-" * 40)
+    for i, d in enumerate(datasets, 1):
+        print(f"  {i}. {d}")
+        
+    while True:
+        try:
+            choice = input(f"\nEnter the number of the dataset to compare [1-{len(datasets)}]: ")
+            choice_idx = int(choice) - 1
+            if 0 <= choice_idx < len(datasets):
+                selected_dataset = datasets[choice_idx]
+                dataset_folder = os.path.join(data_dir, selected_dataset)
+                raw_files = [f for f in os.listdir(dataset_folder) if not f.startswith("train_") and not f.startswith("test_") and f.endswith(".xlsx")]
+                if not raw_files:
+                    print(f"Error: No raw Excel file found in {dataset_folder}")
+                    return
+                DATA_PATH = os.path.join(dataset_folder, raw_files[0])
+                break
+            else:
+                print("Invalid choice, try again.")
+        except ValueError:
+            print("Please enter a valid number.")
+
+    RANDOM_MODEL_PATH = os.path.join("artifacts", f"model_pipeline_{selected_dataset}_random.pkl")
+    SPLIT_MODEL_PATH = os.path.join("artifacts", f"model_pipeline_{selected_dataset}_preset.pkl")
+    TEST_DATA_PATH = os.path.join("data", selected_dataset, "test_data.xlsx")
+    COMPARISON_OUTPUT = os.path.join("output", f"model_comparison_{selected_dataset}.xlsx")
+
     # Check prerequisites
     if not os.path.exists(RANDOM_MODEL_PATH):
         print(f"Error: Random model not found at {RANDOM_MODEL_PATH}")
@@ -90,7 +120,7 @@ def main():
 
     if not os.path.exists(SPLIT_MODEL_PATH):
         print(f"Error: Split model not found at {SPLIT_MODEL_PATH}")
-        print("  Run: python main.py --split_file split/")
+        print("  Run: python main.py")
         return
 
     if not os.path.exists(TEST_DATA_PATH):
@@ -122,13 +152,21 @@ def main():
         print(f"Error: Data file not found at {DATA_PATH}")
         return
 
-    loader = RealExcelDataLoader(DATA_PATH)
+    dataset_tag = os.path.basename(os.path.dirname(DATA_PATH))
+    dataset_config_map = {
+        'first_file': {'employee_id_col': 'fictive2', 'time_col': 'fictive-ovedmiun'},
+        'second_file': {'employee_id_col': 'fictive-oved', 'time_col': None},
+        'factory_two': {'employee_id_col': 'fictive-oved', 'time_col': None},
+    }
+    dataset_config = dataset_config_map.get(dataset_tag, dataset_config_map['first_file'])
+
+    loader = RealExcelDataLoader(DATA_PATH, **dataset_config)
     df_raw = loader.load()
     df = loader.preprocess(df_raw)
 
     # Load test IDs from test_data.xlsx
     test_df = pd.read_excel(TEST_DATA_PATH)
-    EMPLOYEE_COL = 'fictive2' if 'fictive2' in test_df.columns else 'fictive-oved'
+    EMPLOYEE_COL = dataset_config['employee_id_col']
     test_ids = set(test_df[EMPLOYEE_COL].astype(float).astype(int).astype(str))
 
     # Filter to test set

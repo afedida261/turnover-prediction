@@ -164,7 +164,7 @@ def main():
     parser.add_argument('--data_path', type=str, default=None,
                         help="Path to the Excel data file. If not provided, will prompt interactively.")
     parser.add_argument('--output_path', type=str, default=None,
-                        help="Path for output predictions file. Defaults to output/predictions_{dataset}.xlsx")
+                        help="Path for output predictions file. Defaults to output/predictions_{dataset}_{split_type}.xlsx")
     parser.add_argument('--seed', type=int, default=42,
                         help="Random seed for reproducibility")
     parser.add_argument('--results_path', type=str, default=None,
@@ -212,18 +212,39 @@ def main():
 
     # Derive dataset tag dynamically based on the parent folder name
     dataset_tag = os.path.basename(os.path.dirname(args.data_path))
+
+    # ----- 1. Data Handling -----
+    dataset_dir = os.path.dirname(args.data_path)
+    preset_files_exist = os.path.exists(os.path.join(dataset_dir, "train_data.xlsx")) and os.path.exists(os.path.join(dataset_dir, "test_data.xlsx"))
+    
+    using_preset_split = False
+    if preset_files_exist:
+        print("\n" + "="*40)
+        print("Preset Split Files Found")
+        print("="*40)
+        print("  1. Use preset split (train_data.xlsx & test_data.xlsx)")
+        print("  2. Force random 60/20/20 split")
+        while True:
+            choice = input(f"\nEnter your choice [1-2]: ").strip()
+            if choice == '1':
+                using_preset_split = True
+                break
+            elif choice == '2':
+                using_preset_split = False
+                break
+            else:
+                print("Invalid choice, try again.")
+
+    split_type = 'preset' if using_preset_split else 'random'
+
     if not args.results_path:
-        args.results_path = os.path.join('output', f'results_{dataset_tag}.txt')
+        args.results_path = os.path.join('output', f'results_{dataset_tag}_{split_type}.txt')
 
     reporter = Reporter(args.results_path)
     report = reporter.write
 
     # Set seed for reproducibility
     set_seed(args.seed)
-
-    # ----- 1. Data Handling -----
-    dataset_dir = os.path.dirname(args.data_path)
-    using_preset_split = os.path.exists(os.path.join(dataset_dir, "train_data.xlsx")) and os.path.exists(os.path.join(dataset_dir, "test_data.xlsx"))
     
     reporter.section("EMPLOYEE TURNOVER PREDICTION")
     report(f"Dataset:          {dataset_tag}")
@@ -243,7 +264,7 @@ def main():
     dataset_config = dataset_config_map.get(dataset_tag, dataset_config_map['first_file'])
 
     if not args.output_path:
-        args.output_path = os.path.join('output', f'predictions_{dataset_tag}.xlsx')
+        args.output_path = os.path.join('output', f'predictions_{dataset_tag}_{split_type}.xlsx')
 
     # ----- 2. Loading & Preprocessing -----
     print(f"Loading and preprocessing {dataset_tag}...")
@@ -509,10 +530,9 @@ def main():
             'feature_names': loader.get_feature_names(),
             'dataset_tag': dataset_tag,
             'dataset_config': dataset_config,
-            'split_type': 'fixed' if using_preset_split else 'random',
+            'split_type': split_type,
             'use_preset_split': using_preset_split,
         }
-        split_type = 'fixed' if using_preset_split else 'random'
         artifact_path = os.path.join('artifacts', f'model_pipeline_{dataset_tag}_{split_type}.pkl')
         joblib.dump(pipeline, artifact_path)
         report(f"Model pipeline:    {artifact_path}")

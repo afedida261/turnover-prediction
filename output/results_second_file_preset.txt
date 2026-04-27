@@ -71,7 +71,7 @@ posterior predictive distribution at each test point.
 ================================================================================
 OUTPUT FILES & RISK DISTRIBUTION
 ================================================================================
-Predictions Excel: output\predictions_second_file.xlsx
+Predictions Excel: output\predictions_second_file_preset.xlsx
 Unique employees:  8533
 
 Risk distribution:
@@ -79,5 +79,5 @@ Risk distribution:
   Very High Risk     2123  (24.9%)
   Medium Risk         226  (2.6%)
   High Risk           163  (1.9%)
-Model pipeline:    artifacts\model_pipeline_second_file_fixed.pkl
+Model pipeline:    artifacts\model_pipeline_second_file_preset.pkl
 

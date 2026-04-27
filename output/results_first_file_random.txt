@@ -70,7 +70,7 @@ posterior predictive distribution at each test point.
 ================================================================================
 OUTPUT FILES & RISK DISTRIBUTION
 ================================================================================
-Predictions Excel: output\predictions_first_file.xlsx
+Predictions Excel: output\predictions_first_file_random.xlsx
 Unique employees:  1472
 
 Risk distribution:
