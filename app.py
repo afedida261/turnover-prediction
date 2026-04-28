@@ -123,15 +123,14 @@ if not datasets:
 
 selected_dataset = st.sidebar.selectbox("Select Dataset", datasets)
 
-DATA_PATH = f"output/predictions_{selected_dataset}.xlsx"
+DATA_PATH = f"output/predictions_{selected_dataset}_preset.xlsx"
 dataset_folder = os.path.join("data", selected_dataset)
 raw_files = [f for f in os.listdir(dataset_folder) if not f.startswith("train_") and not f.startswith("test_") and f.endswith(".xlsx")]
 RAW_DATA_PATH = os.path.join(dataset_folder, raw_files[0]) if raw_files else ""
 
-fixed_model = f"artifacts/model_pipeline_{selected_dataset}_fixed.pkl"
+fixed_model = f"artifacts/model_pipeline_{selected_dataset}_preset.pkl"
 random_model = f"artifacts/model_pipeline_{selected_dataset}_random.pkl"
 API_PATH = fixed_model if os.path.exists(fixed_model) else random_model
-
 
 @st.cache_data
 def load_dashboard_data(filepath: str) -> pd.DataFrame:

@@ -176,17 +176,19 @@ def main():
             print(f"  Available columns: {list(ww.columns)}")
             return
 
-        ww[EMPLOYEE_COL] = ww[ww_emp_col].astype(float).astype(int).astype(str)
+        ww[EMPLOYEE_COL] = pd.to_numeric(ww[ww_emp_col], errors='coerce').fillna(-1).astype(int).astype(str)
+        2
         
         prob_col = 'Concl_Prob' if 'Concl_Prob' in ww.columns else 'Probability'
         if prob_col in ww.columns:
-            ww['ww_prob'] = ww[prob_col].astype(float)
+            # Shift " No Prediction" garbage text safely to 0.0 probability to preserve the metric scoring
+            ww['ww_prob'] = pd.to_numeric(ww[prob_col], errors='coerce').fillna(0.0)
         else:
             ww['ww_prob'] = np.nan
             
         actual_col = 'leave_ind' if 'leave_ind' in ww.columns else 'Actual'
         if actual_col in ww.columns:
-            ww['ww_actual'] = ww[actual_col].astype(float).astype(int)
+            ww['ww_actual'] = pd.to_numeric(ww[actual_col], errors='coerce').fillna(0).astype(int)
         else:
             ww['ww_actual'] = np.nan
 
