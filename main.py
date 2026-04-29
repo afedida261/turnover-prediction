@@ -372,6 +372,7 @@ def main():
         test_metrics['Model'] = name
         test_metrics['Val_AUC'] = val_metrics['AUC_ROC']
         test_metrics['Val_F1'] = val_metrics['F1_Score']
+        test_metrics['Val_Precision'] = val_metrics['Precision']
         results.append(test_metrics)
     pbar.close()
 
@@ -379,9 +380,14 @@ def main():
     reporter.section("MODEL COMPARISON")
     if results:
         results_df = pd.DataFrame(results)
-        cols = ['Model', 'Val_AUC', 'AUC_ROC', 'Val_F1', 'F1_Score',
+        cols = ['Model', 'Val_AUC', 'AUC_ROC', 'Val_F1', 'F1_Score', 'Val_Precision', 'Precision',
                 'Precision@Top20%', 'Recall@Top20%', 'Recall@Top50%',
                 'Primary_Probability', 'Avg_Error_Cost', 'Error_Cost', 'Improvement_Factor']
+                
+        # If using preset split, Validation == Test, so hide redundant Validation metrics
+        if split_type == 'preset':
+            cols = [c for c in cols if not c.startswith('Val_')]
+            
         cols = [c for c in cols if c in results_df.columns]
         display_df = results_df[cols].copy()
         rename_map = {
@@ -390,6 +396,8 @@ def main():
             'AUC_ROC': 'Test AUC',
             'Val_F1': 'Val F1',
             'F1_Score': 'Test F1',
+            'Val_Precision': 'Val Prec',
+            'Precision': 'Test Prec',
             'Precision@Top20%': 'Prec@20%',
             'Recall@Top20%': 'Rec@20%',
             'Recall@Top50%': 'Rec@50%',
@@ -399,7 +407,9 @@ def main():
             'Improvement_Factor': 'Impr Factor',
         }
         display_df = display_df.rename(columns=rename_map)
-        display_df = display_df.sort_values(by='Val AUC', ascending=False)
+        
+        sort_col = 'Val AUC' if 'Val AUC' in display_df.columns else 'Test AUC'
+        display_df = display_df.sort_values(by=sort_col, ascending=False)
 
         # Format floats to 4 decimals for the text table
         float_cols = [c for c in display_df.columns if c != 'Model']

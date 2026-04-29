@@ -84,7 +84,7 @@ def compute_shap_summary(model, X: pd.DataFrame, feature_names: list, top_n: int
         raise ImportError("shap is not installed. Run: pip install shap")
 
     # Use a background sample for efficiency; force all columns to float64
-    sample_size = min(500, len(X))
+    sample_size = min(150, len(X))
     X_sample = X.sample(sample_size, random_state=42) if len(X) > sample_size else X
     X_sample = X_sample.apply(pd.to_numeric, errors='coerce').fillna(0).astype(np.float64)
 
@@ -102,7 +102,7 @@ def compute_shap_summary(model, X: pd.DataFrame, feature_names: list, top_n: int
             shap_values = shap_values[1]
     else:
         # PermutationExplainer returns shap.Explanation object
-        raw_out = explainer(X_sample)
+        raw_out = explainer(X_sample, max_evals=500)
         shap_values = raw_out.values
         
     # Enforce 2D array: (samples, features)
