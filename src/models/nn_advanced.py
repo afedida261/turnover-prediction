@@ -81,6 +81,7 @@ class RegularizedMLPTurnover(BaseTurnoverModel):
             train_dataset,
             batch_size=self.batch_size,
             shuffle=True,
+            drop_last=True,
         )
 
         X_val_tensor = torch.tensor(X_val, dtype=torch.float32).to(self.device)

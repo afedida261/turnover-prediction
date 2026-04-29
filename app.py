@@ -159,37 +159,102 @@ st.title("Executive Turnover Dashboard")
 st.caption("HR-focused turnover risk analysis. Click charts to drill in. ML training lives in `streamlit run ml_workbench_app.py`.")
 
 # ---------------------------------------------------------------------------
-# Data Loading & Initialization
+# Auto-detect latest output files
 # ---------------------------------------------------------------------------
-# DATA_PATH = "output/predictions_output.xlsx"
-DATA_PATH = "output/predictions_first_file.xlsx"
-RAW_DATA_PATH = "data/raw/first_file.xlsx"
+import glob
+import json
+
+
+def _find_latest_predictions() -> str:
+    """Find the most recent predictions Excel — workbench jobs first, then legacy output."""
+    job_preds = sorted(glob.glob("output/ml_jobs/predictions_*.xlsx"), key=os.path.getmtime, reverse=True)
+    if job_preds:
+        return job_preds[0]
+    legacy = "output/predictions_first_file.xlsx"
+    if os.path.exists(legacy):
+        return legacy
+    return ""
+
+
+def _find_latest_pipeline() -> str:
+    """Find the most recent model pipeline pickle in artifacts/."""
+    pkls = sorted(glob.glob("artifacts/model_pipeline_*.pkl"), key=os.path.getmtime, reverse=True)
+    return pkls[0] if pkls else ""
+
+
+_DEFAULT_RAW_PATH = "data/raw/first_file.xlsx"
+_AUTO_PREDICTIONS = _find_latest_predictions()
+_AUTO_PIPELINE = _find_latest_pipeline()
+
+# ---------------------------------------------------------------------------
+# Sidebar — Data Source Configuration
+# ---------------------------------------------------------------------------
+with st.sidebar:
+    st.markdown("## Data Sources")
+    st.caption("Auto-detected from latest training run. Override if needed.")
+
+    _raw_path = st.text_input(
+        "Raw Input Data (.xlsx)",
+        value=_DEFAULT_RAW_PATH,
+        help="Path to the raw employee data Excel file used for inference / What-If.",
+        key="cfg_raw_path",
+    )
+    _pred_path = st.text_input(
+        "Predictions (.xlsx)",
+        value=_AUTO_PREDICTIONS,
+        help="Predictions Excel with columns like 'Employee ID', 'Turnover Probability', 'Risk Category'.",
+        key="cfg_pred_path",
+    )
+    _pkl_path = st.text_input(
+        "Model Pipeline (.pkl)",
+        value=_AUTO_PIPELINE,
+        help="Saved model pipeline pickle (for What-If inference in Micro view).",
+        key="cfg_pkl_path",
+    )
+
+    if not _pred_path or not os.path.exists(_pred_path):
+        st.warning("Predictions file not found. Run a training job or set the correct path.")
+    if not _pkl_path or not os.path.exists(_pkl_path):
+        st.warning("Model pipeline not found. What-If simulations will be unavailable.")
+    if not _raw_path or not os.path.exists(_raw_path):
+        st.warning("Raw data file not found. What-If simulations will be unavailable.")
+
+    st.markdown("---")
+
+# ---------------------------------------------------------------------------
+# Data Loading & Initialization (uses sidebar paths)
+# ---------------------------------------------------------------------------
 
 @st.cache_data
-def load_dashboard_data(filepath: str = DATA_PATH) -> pd.DataFrame:
-    if not os.path.exists(filepath):
+def load_dashboard_data(filepath: str) -> pd.DataFrame:
+    if not filepath or not os.path.exists(filepath):
         return pd.DataFrame()
     return pd.read_excel(filepath)
 
 @st.cache_data
-def load_raw_data(filepath: str = RAW_DATA_PATH) -> pd.DataFrame:
-    if not os.path.exists(filepath):
+def load_raw_data(filepath: str) -> pd.DataFrame:
+    if not filepath or not os.path.exists(filepath):
         return pd.DataFrame()
     return pd.read_excel(filepath)
 
 @st.cache_resource
-def load_inference_api():
+def load_inference_api(pipeline_path: str):
+    if not pipeline_path or not os.path.exists(pipeline_path):
+        return None
     try:
-        return TurnoverInferenceAPI()
-    except Exception as e:
+        return TurnoverInferenceAPI(pipeline_path=pipeline_path)
+    except Exception:
         return None
 
-dashboard_df = load_dashboard_data()
-raw_df = load_raw_data()
-api = load_inference_api()
+dashboard_df = load_dashboard_data(_pred_path)
+raw_df = load_raw_data(_raw_path)
+api = load_inference_api(_pkl_path)
 
 if dashboard_df.empty:
-    st.error(f"Data file **{DATA_PATH}** not found. Please run `python main.py` first.")
+    st.error(
+        f"Predictions file not found or empty at **{_pred_path}**.\n\n"
+        "Run a training job in ML Workbench or set the correct path in the sidebar."
+    )
     st.stop()
 
 
@@ -855,9 +920,8 @@ def view_micro():
 
     if raw_df.empty or api is None:
         st.warning(
-            "Raw data or model not properly loaded. "
-            "Missing `data/raw/first_file.xlsx` or `artifacts/model_pipeline.pkl`. "
-            "Please run `python main.py` first."
+            "Raw data or model pipeline not loaded. "
+            "Check the **Data Sources** section in the sidebar and ensure the paths are correct."
         )
         return
 

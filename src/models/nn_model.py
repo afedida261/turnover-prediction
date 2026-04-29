@@ -80,7 +80,7 @@ class NeuralNetTurnover(BaseTurnoverModel):
         )
 
         dataset = torch.utils.data.TensorDataset(X_train_tensor, y_train_tensor)
-        dataloader = torch.utils.data.DataLoader(dataset, batch_size=self.batch_size, shuffle=True)
+        dataloader = torch.utils.data.DataLoader(dataset, batch_size=self.batch_size, shuffle=True, drop_last=True)
 
         best_val_loss = float('inf')
         best_state = copy.deepcopy(self.model.state_dict())
