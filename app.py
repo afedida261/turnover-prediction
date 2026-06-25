@@ -14,6 +14,8 @@ sys.path.append(_SCRIPT_DIR)
 try:
     from src.inference import TurnoverInferenceAPI
     from src.config import FEATURE_DESCRIPTIONS
+    from src.datasets import discover_dataset_specs, read_excel_with_header_detection
+    from src.final_dashboard import FINAL_ARTIFACT_PATH, load_final_dashboard_bundle, apply_final_what_if, available_options
     from src import chatbot
 except ImportError as e:
     st.error(f"Could not import internal modules: {e}")
@@ -110,27 +112,39 @@ st.title("Executive Turnover Dashboard")
 # Dynamic Dataset Selection & Caching
 # ---------------------------------------------------------------------------
 
-st.sidebar.title("🗂️ Configuration")
-data_dir = "data"
-if os.path.exists(data_dir):
-    datasets = sorted([d for d in os.listdir(data_dir) if os.path.isdir(os.path.join(data_dir, d))])
-else:
-    datasets = []
+st.sidebar.title("??? Configuration")
+dataset_specs, skipped_specs = discover_dataset_specs(include_root_excels=False)
+spec_by_tag = {spec.tag: spec for spec in dataset_specs}
+legacy_datasets = [
+    spec.tag
+    for spec in dataset_specs
+    if os.path.exists(f"output/predictions_{spec.tag}.xlsx")
+]
 
-if not datasets:
-    st.error("No dataset directories (like 'first_file') found in data/")
+FINAL_DATASET_LABEL = "Final model (file3 external test)"
+dataset_options = []
+if FINAL_ARTIFACT_PATH.exists():
+    dataset_options.append(FINAL_DATASET_LABEL)
+dataset_options.extend(legacy_datasets)
+
+if not dataset_options:
+    st.error("No trained predictions found. Run `python scripts/train_final_models.py` for the final model or `python main.py --all` for legacy datasets.")
     st.stop()
 
-selected_dataset = st.sidebar.selectbox("Select Dataset", datasets)
+selected_dataset = st.sidebar.selectbox("Select Dataset", dataset_options)
+is_final_dataset = selected_dataset == FINAL_DATASET_LABEL
 
-DATA_PATH = f"output/predictions_{selected_dataset}.xlsx"
-dataset_folder = os.path.join("data", selected_dataset)
-raw_files = [f for f in os.listdir(dataset_folder) if not f.startswith("train_") and not f.startswith("test_") and f.endswith(".xlsx")]
-RAW_DATA_PATH = os.path.join(dataset_folder, raw_files[0]) if raw_files else ""
-
-fixed_model = f"artifacts/model_pipeline_{selected_dataset}_fixed.pkl"
-random_model = f"artifacts/model_pipeline_{selected_dataset}_random.pkl"
-API_PATH = fixed_model if os.path.exists(fixed_model) else random_model
+if is_final_dataset:
+    DATA_PATH = "output/final/file3_predictions.xlsx"
+    RAW_DATA_PATH = "prepared final file3 rows"
+    API_PATH = str(FINAL_ARTIFACT_PATH)
+else:
+    selected_spec = spec_by_tag[selected_dataset]
+    DATA_PATH = f"output/predictions_{selected_dataset}.xlsx"
+    RAW_DATA_PATH = str(selected_spec.path)
+    fixed_model = f"artifacts/model_pipeline_{selected_dataset}_fixed.pkl"
+    random_model = f"artifacts/model_pipeline_{selected_dataset}_random.pkl"
+    API_PATH = fixed_model if os.path.exists(fixed_model) else random_model
 
 
 @st.cache_data
@@ -143,7 +157,8 @@ def load_dashboard_data(filepath: str) -> pd.DataFrame:
 def load_raw_data(filepath: str) -> pd.DataFrame:
     if not os.path.exists(filepath):
         return pd.DataFrame()
-    return pd.read_excel(filepath)
+    df, _ = read_excel_with_header_detection(filepath)
+    return df
 
 @st.cache_resource
 def load_inference_api(api_path: str):
@@ -152,15 +167,32 @@ def load_inference_api(api_path: str):
             from src.inference import TurnoverInferenceAPI
             return TurnoverInferenceAPI(api_path)
         return None
-    except Exception as e:
+    except Exception:
         return None
 
-dashboard_df = load_dashboard_data(DATA_PATH)
-raw_df = load_raw_data(RAW_DATA_PATH)
-api = load_inference_api(API_PATH)
+@st.cache_resource
+def load_final_bundle_cached(api_path: str):
+    return load_final_dashboard_bundle(api_path)
+
+if is_final_dataset:
+    final_bundle = load_final_bundle_cached(API_PATH)
+    dashboard_df = final_bundle["dashboard_df"].copy()
+    raw_df = final_bundle["raw_df"].copy()
+    api = load_inference_api(API_PATH)
+    final_metadata = final_bundle["metadata"]
+    st.sidebar.caption(f"Model: {final_metadata['candidate']}")
+else:
+    final_bundle = None
+    final_metadata = {}
+    dashboard_df = load_dashboard_data(DATA_PATH)
+    raw_df = load_raw_data(RAW_DATA_PATH)
+    api = load_inference_api(API_PATH)
 
 if dashboard_df.empty:
-    st.error(f"Predictions file **{DATA_PATH}** not found. Please run `python main.py` and select `{selected_dataset}` first.")
+    if is_final_dataset:
+        st.error(f"Final predictions could not be built from **{API_PATH}**.")
+    else:
+        st.error(f"Predictions file **{DATA_PATH}** not found. Please run `python main.py --dataset {selected_dataset}` first.")
     st.stop()
 
 
@@ -521,9 +553,13 @@ with tab_micro:
     if raw_df.empty or api is None:
         st.warning(f"Raw data or model not properly loaded for `{selected_dataset}`. Missing `{RAW_DATA_PATH}` or `{API_PATH}`. Please run `python main.py` first.")
     else:
-        dataset_config = api.pipeline.get('dataset_config', {})
-        employee_id_col = dataset_config.get('employee_id_col', 'fictive2')
-        time_col = dataset_config.get('time_col')
+        if is_final_dataset:
+            employee_id_col = getattr(api, 'employee_id_col', 'fictive_employee')
+            time_col = getattr(api, 'time_col', 'calc_month')
+        else:
+            dataset_config = api.pipeline.get('dataset_config', {})
+            employee_id_col = dataset_config.get('employee_id_col', 'fictive2')
+            time_col = dataset_config.get('time_col')
         
         valid_employees = sorted(dashboard_df["Employee ID"].unique())
         
@@ -573,6 +609,7 @@ with tab_micro:
             base_illness = safe_float(latest_record.get('avg_illness', 0.0))
             base_maamad = safe_val(latest_record.get('Maamad', np.nan))
             base_seif = safe_val(latest_record.get('Seif', np.nan))
+            base_contract = safe_val(latest_record.get('contract_type', np.nan))
             
             # Initialize Session State ONLY if it doesn't exist
             if f"sl_salary_{selected_emp_id}" not in st.session_state:
@@ -581,6 +618,7 @@ with tab_micro:
                 st.session_state[f"sl_ill_{selected_emp_id}"] = base_illness
                 st.session_state[f"sel_maamad_{selected_emp_id}"] = base_maamad
                 st.session_state[f"sel_seif_{selected_emp_id}"] = base_seif
+                st.session_state[f"sel_contract_{selected_emp_id}"] = base_contract
             
             # Reset Callback Logic
             def reset_levers():
@@ -589,6 +627,7 @@ with tab_micro:
                 st.session_state[f"sl_ill_{selected_emp_id}"] = base_illness
                 st.session_state[f"sel_maamad_{selected_emp_id}"] = base_maamad
                 st.session_state[f"sel_seif_{selected_emp_id}"] = base_seif
+                st.session_state[f"sel_contract_{selected_emp_id}"] = base_contract
                 
             col_reset1, col_reset2 = st.columns([8, 2])
             with col_reset2:
@@ -670,23 +709,36 @@ with tab_micro:
                                        min_value=0.0, max_value=max_illness, 
                                        step=1.0, key=f"sl_ill_{selected_emp_id}")
                 
-                maamad_opts = raw_df['Maamad'].dropna().unique().tolist()
-                if base_maamad not in maamad_opts and pd.notna(base_maamad): maamad_opts.append(base_maamad)
-                maamad_opts = sorted(list(set(maamad_opts)))
-                new_maamad = st.selectbox("Job Rank (Maamad)", options=maamad_opts, key=f"sel_maamad_{selected_emp_id}")
+                if is_final_dataset:
+                    contract_opts = available_options(raw_df, 'contract_type', base_contract)
+                    new_contract = st.selectbox("Contract Type", options=contract_opts, key=f"sel_contract_{selected_emp_id}") if contract_opts else base_contract
+                else:
+                    new_contract = base_contract
+
+                maamad_opts = available_options(raw_df, 'Maamad', base_maamad)
+                new_maamad = st.selectbox("Job Rank (Maamad)", options=maamad_opts, key=f"sel_maamad_{selected_emp_id}") if maamad_opts else base_maamad
                                          
-                seif_opts = raw_df['Seif'].dropna().unique().tolist()
-                if base_seif not in seif_opts and pd.notna(base_seif): seif_opts.append(base_seif)
-                seif_opts = sorted(list(set(seif_opts)))
-                new_seif = st.selectbox("Budget Section (Seif)", options=seif_opts, key=f"sel_seif_{selected_emp_id}")
+                seif_opts = available_options(raw_df, 'Seif', base_seif)
+                new_seif = st.selectbox("Budget Section (Seif)", options=seif_opts, key=f"sel_seif_{selected_emp_id}") if seif_opts else base_seif
                                        
-            mod_records = emp_records.copy()
-            latest_idx = mod_records.index[-1]
-            mod_records.at[latest_idx, 'avg_Payment'] = new_salary
-            mod_records.at[latest_idx, 'avg_omes'] = new_workload
-            mod_records.at[latest_idx, 'avg_illness'] = new_illness
-            mod_records.at[latest_idx, 'Maamad'] = new_maamad
-            mod_records.at[latest_idx, 'Seif'] = new_seif
+            if is_final_dataset:
+                mod_records = apply_final_what_if(
+                    emp_records,
+                    salary=new_salary,
+                    workload=new_workload,
+                    illness=new_illness,
+                    contract_type=new_contract,
+                    maamad=new_maamad,
+                    seif=new_seif,
+                )
+            else:
+                mod_records = emp_records.copy()
+                latest_idx = mod_records.index[-1]
+                mod_records.at[latest_idx, 'avg_Payment'] = new_salary
+                mod_records.at[latest_idx, 'avg_omes'] = new_workload
+                mod_records.at[latest_idx, 'avg_illness'] = new_illness
+                mod_records.at[latest_idx, 'Maamad'] = new_maamad
+                mod_records.at[latest_idx, 'Seif'] = new_seif
             
             try:
                 new_prob, new_category = api.predict_risk(mod_records)
@@ -739,41 +791,78 @@ with tab_micro:
                 orig_salary = safe_float(latest_record.get('avg_Payment', 0))
                 orig_workload = safe_float(latest_record.get('avg_omes', 0))
                 orig_illness = safe_float(latest_record.get('avg_illness', 0))
-                
-                diffs = {
-                    "Salary": ((new_salary - orig_salary) / max(1, orig_salary)) * 100,
-                    "Workload": ((new_workload - orig_workload) / max(1, orig_workload)) * 100,
-                    "Sick Days": ((new_illness - orig_illness) / max(1, orig_illness)) * 100,
-                }
-                
-                df_diffs = pd.DataFrame(list(diffs.items()), columns=["Feature", "% Change"])
-                
-                colors = []
-                for idx, row in df_diffs.iterrows():
-                    val = row["% Change"]
-                    feat = row["Feature"]
-                    if val == 0:
-                        colors.append("lightgray")
-                    elif feat in ["Workload", "Sick Days"]:
-                        colors.append("#e74c3c" if val > 0 else "#2ecc71")
-                    else: 
-                        colors.append("#2ecc71" if val > 0 else "#e74c3c")
-                
-                fig_diff = go.Figure(go.Bar(
-                    x=df_diffs["% Change"],
-                    y=df_diffs["Feature"],
-                    orientation='h',
-                    marker_color=colors,
-                    text=df_diffs["% Change"].apply(lambda x: f"+{x:.1f}%" if x > 0 else f"{x:.1f}%"),
-                    textposition="auto"
-                ))
-                fig_diff.update_layout(dragmode=False, 
-                    xaxis_title="Simulation % Change vs Original",
-                    yaxis_title="",
-                    height=200,
-                    margin=dict(l=20, r=20, t=20, b=20),
-                    xaxis=dict(zeroline=True, zerolinewidth=2, zerolinecolor='black')
-                )
+
+                if is_final_dataset:
+                    lever_specs = [
+                        ("Salary", dict(salary=new_salary, workload=orig_workload, illness=orig_illness, contract_type=base_contract, maamad=base_maamad, seif=base_seif)),
+                        ("Workload", dict(salary=orig_salary, workload=new_workload, illness=orig_illness, contract_type=base_contract, maamad=base_maamad, seif=base_seif)),
+                        ("Sick Days", dict(salary=orig_salary, workload=orig_workload, illness=new_illness, contract_type=base_contract, maamad=base_maamad, seif=base_seif)),
+                        ("Contract", dict(salary=orig_salary, workload=orig_workload, illness=orig_illness, contract_type=new_contract, maamad=base_maamad, seif=base_seif)),
+                        ("Job Rank", dict(salary=orig_salary, workload=orig_workload, illness=orig_illness, contract_type=base_contract, maamad=new_maamad, seif=base_seif)),
+                        ("Budget Section", dict(salary=orig_salary, workload=orig_workload, illness=orig_illness, contract_type=base_contract, maamad=base_maamad, seif=new_seif)),
+                    ]
+                    impact_rows = []
+                    for label, kwargs in lever_specs:
+                        try:
+                            one_change_records = apply_final_what_if(emp_records, **kwargs)
+                            one_prob, _ = api.predict_risk(one_change_records)
+                            impact_rows.append({"Feature": label, "Risk Delta (pp)": (one_prob - current_prob) * 100})
+                        except Exception:
+                            impact_rows.append({"Feature": label, "Risk Delta (pp)": 0.0})
+
+                    df_diffs = pd.DataFrame(impact_rows)
+                    df_diffs = df_diffs.loc[df_diffs["Risk Delta (pp)"].abs().sort_values(ascending=False).index]
+                    colors = ["#e74c3c" if val > 0 else "#2ecc71" if val < 0 else "lightgray" for val in df_diffs["Risk Delta (pp)"]]
+                    fig_diff = go.Figure(go.Bar(
+                        x=df_diffs["Risk Delta (pp)"],
+                        y=df_diffs["Feature"],
+                        orientation='h',
+                        marker_color=colors,
+                        text=df_diffs["Risk Delta (pp)"].apply(lambda x: f"+{x:.2f} pp" if x > 0 else f"{x:.2f} pp"),
+                        textposition="auto"
+                    ))
+                    fig_diff.update_layout(dragmode=False,
+                        xaxis_title="Estimated risk change from each lever",
+                        yaxis_title="",
+                        height=260,
+                        margin=dict(l=20, r=20, t=20, b=20),
+                        xaxis=dict(zeroline=True, zerolinewidth=2, zerolinecolor='black')
+                    )
+                else:
+                    diffs = {
+                        "Salary": ((new_salary - orig_salary) / max(1, orig_salary)) * 100,
+                        "Workload": ((new_workload - orig_workload) / max(1, orig_workload)) * 100,
+                        "Sick Days": ((new_illness - orig_illness) / max(1, orig_illness)) * 100,
+                    }
+                    
+                    df_diffs = pd.DataFrame(list(diffs.items()), columns=["Feature", "% Change"])
+                    
+                    colors = []
+                    for idx, row in df_diffs.iterrows():
+                        val = row["% Change"]
+                        feat = row["Feature"]
+                        if val == 0:
+                            colors.append("lightgray")
+                        elif feat in ["Workload", "Sick Days"]:
+                            colors.append("#e74c3c" if val > 0 else "#2ecc71")
+                        else: 
+                            colors.append("#2ecc71" if val > 0 else "#e74c3c")
+                    
+                    fig_diff = go.Figure(go.Bar(
+                        x=df_diffs["% Change"],
+                        y=df_diffs["Feature"],
+                        orientation='h',
+                        marker_color=colors,
+                        text=df_diffs["% Change"].apply(lambda x: f"+{x:.1f}%" if x > 0 else f"{x:.1f}%"),
+                        textposition="auto"
+                    ))
+                    fig_diff.update_layout(dragmode=False, 
+                        xaxis_title="Simulation % Change vs Original",
+                        yaxis_title="",
+                        height=200,
+                        margin=dict(l=20, r=20, t=20, b=20),
+                        xaxis=dict(zeroline=True, zerolinewidth=2, zerolinecolor='black')
+                    )
                 st.plotly_chart(fig_diff, width="stretch", config={"displayModeBar": False})
 
 render_floating_chat_widget(dashboard_df, raw_df, api)
