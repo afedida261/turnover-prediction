@@ -53,9 +53,9 @@ class RandomForestTurnover(BaseTurnoverModel):
         return self.model.feature_importances_
 
 class XGBoostTurnover(BaseTurnoverModel):
-    def __init__(self, scale_pos_weight=None, use_label_encoder=False, eval_metric='logloss', random_state=42, **kwargs):
+    def __init__(self, scale_pos_weight=None, eval_metric='logloss', random_state=42, **kwargs):
         super().__init__()
-        self.model = XGBClassifier(scale_pos_weight=scale_pos_weight, use_label_encoder=use_label_encoder, eval_metric=eval_metric, random_state=random_state, **kwargs)
+        self.model = XGBClassifier(scale_pos_weight=scale_pos_weight, eval_metric=eval_metric, random_state=random_state, **kwargs)
         self.feature_names = None
 
     def fit(self, X, y):
@@ -120,7 +120,7 @@ class EnsembleTurnover(BaseTurnoverModel):
         if models is None:
             self.estimators = [
                 ('rf', RandomForestClassifier(n_estimators=100, class_weight='balanced', random_state=random_state)),
-                ('xgb', XGBClassifier(use_label_encoder=False, eval_metric='logloss', scale_pos_weight=10, random_state=random_state)),
+                ('xgb', XGBClassifier(eval_metric='logloss', scale_pos_weight=10, random_state=random_state)),
                 ('ada', AdaBoostClassifier(n_estimators=100, learning_rate=0.5, random_state=random_state))
             ]
         else:

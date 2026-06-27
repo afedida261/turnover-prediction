@@ -6,7 +6,7 @@ class Evaluator:
     def __init__(self):
         pass
 
-    def evaluate(self, model, X_test, y_test):
+    def evaluate(self, model, X_test, y_test, threshold=0.5):
         """
         Evaluates the model using standard metrics and the specific business metric:
         Recall @ Top 20% (Lift).
@@ -21,7 +21,7 @@ class Evaluator:
             # Fallback for models that might not have predict_proba (e.g. SVM without probability=True)
             y_prob = model.predict(X_test)
 
-        y_pred = (y_prob >= 0.5).astype(int)
+        y_pred = (y_prob >= threshold).astype(int)
         
         # Standard Metrics
         metrics = {
