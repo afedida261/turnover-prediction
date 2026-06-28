@@ -161,7 +161,13 @@ def make_tabular_transformer(
     )
 
 
-def make_estimator(model_name: str, y_train: pd.Series, seed: int):
+def make_estimator(
+    model_name: str,
+    y_train: pd.Series,
+    seed: int,
+    params: dict[str, float | int] | None = None,
+):
+    params = params or {}
     positives = max(int(pd.Series(y_train).eq(1).sum()), 1)
     negatives = max(int(pd.Series(y_train).eq(0).sum()), 1)
     scale_pos_weight = negatives / positives
@@ -171,28 +177,29 @@ def make_estimator(model_name: str, y_train: pd.Series, seed: int):
             class_weight="balanced",
             penalty="l2",
             solver="liblinear",
-            max_iter=2000,
+            C=float(params.get("C", 1.0)),
+            max_iter=int(params.get("max_iter", 2000)),
             random_state=seed,
         )
     if model_name == "Random Forest":
         return RandomForestClassifier(
-            n_estimators=300,
-            max_depth=14,
-            min_samples_leaf=5,
-            max_features="sqrt",
+            n_estimators=int(params.get("n_estimators", 300)),
+            max_depth=int(params.get("max_depth", 14)),
+            min_samples_leaf=int(params.get("min_samples_leaf", 5)),
+            max_features=params.get("max_features", "sqrt"),
             class_weight="balanced_subsample",
             random_state=seed,
             n_jobs=1,
         )
     if model_name == "XGBoost":
         return XGBClassifier(
-            n_estimators=300,
-            max_depth=4,
-            learning_rate=0.04,
-            min_child_weight=3,
-            subsample=0.90,
-            colsample_bytree=0.85,
-            reg_lambda=2.0,
+            n_estimators=int(params.get("n_estimators", 300)),
+            max_depth=int(params.get("max_depth", 4)),
+            learning_rate=float(params.get("learning_rate", 0.04)),
+            min_child_weight=float(params.get("min_child_weight", 3)),
+            subsample=float(params.get("subsample", 0.90)),
+            colsample_bytree=float(params.get("colsample_bytree", 0.85)),
+            reg_lambda=float(params.get("reg_lambda", 2.0)),
             objective="binary:logistic",
             eval_metric="logloss",
             scale_pos_weight=scale_pos_weight,
@@ -201,9 +208,13 @@ def make_estimator(model_name: str, y_train: pd.Series, seed: int):
             n_jobs=1,
         )
     raise ValueError(f"Unknown model: {model_name}")
-
-
-def make_candidate_pipeline(spec: CandidateSpec, X: pd.DataFrame, y: pd.Series, seed: int) -> Pipeline:
+def make_candidate_pipeline(
+    spec: CandidateSpec,
+    X: pd.DataFrame,
+    y: pd.Series,
+    seed: int,
+    estimator_params: dict[str, float | int] | None = None,
+) -> Pipeline:
     use_learned_imputation = spec.payment_strategy == "learned_imputation"
     native_missing = spec.payment_strategy == "native_missing"
     steps = []
@@ -219,7 +230,7 @@ def make_candidate_pipeline(spec: CandidateSpec, X: pd.DataFrame, y: pd.Series, 
                 payment_indicators=use_learned_imputation,
             ),
         ),
-        ("model", make_estimator(spec.model_name, y, seed)),
+        ("model", make_estimator(spec.model_name, y, seed, estimator_params)),
     ])
     return Pipeline(steps)
 

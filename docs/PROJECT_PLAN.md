@@ -42,12 +42,13 @@ The grouped analysis is important because age and tenure are strong descriptive 
 
 ## Dashboard integration
 
-The Streamlit app keeps the existing executive-dashboard appearance while loading the final artifacts. The what-if simulator now focuses on levers supported by the final importance analysis, so simulated changes better match the model’s learned behavior.
+The Streamlit app keeps the existing executive-dashboard appearance while loading selectable final/workbench artifacts. The what-if simulator now focuses on levers supported by the final importance analysis, so simulated changes better match the model's learned behavior.
 
 ## Final deliverables
 
-- Cleaned and organized source code in `src/` and `scripts/`.
+- Cleaned and organized source code in `src/`, with active analysis utilities under `src/analysis/` and obsolete standalone wrappers removed from the active tree.
 - Final model artifacts in `artifacts/`.
 - Evaluation and explainability outputs in `output/final/`.
 - Updated Streamlit dashboard in `app.py`.
+- Configurable ML workbench in `ml_workbench_app.py`.
 - Advisor-facing LaTeX report in `report/final_report.tex` and `report/final_report.pdf`.

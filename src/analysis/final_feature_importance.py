@@ -27,7 +27,7 @@ import seaborn as sns
 from sklearn.metrics import roc_auc_score
 from sklearn.model_selection import StratifiedKFold
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
@@ -405,6 +405,81 @@ def consensus_importance(
     summary.insert(0, "Consensus_Rank", np.arange(1, len(summary) + 1))
     return add_classification(summary)
 
+def save_grouped_consensus_plot(consensus: pd.DataFrame, path: Path) -> pd.DataFrame:
+    poster_labels = {
+        "Age / tenure": "Tenure & age",
+        "Role / manager / organization": "Role, manager & org",
+        "Location / commute": "Location & commute",
+        "Data maturity / timing": "Data timing",
+        "Data availability": "Data availability",
+        "Demographic context": "Demographic context",
+        "Absence / wellness": "Absence & wellness",
+    }
+    data = consensus.copy()
+    data["Feature_Group"] = data["Domain"].map(lambda value: poster_labels.get(value, value))
+    data.loc[data["Feature_Group"].isin(["Other", "Demographic context"]), "Feature_Group"] = "Other context"
+
+    metrics = [
+        "Native_Importance_Sum",
+        "Mean_Abs_SHAP_Sum",
+        "Permutation_AUC_Drop_Mean",
+        "AUC_Gain_Mean",
+    ]
+    clipped = data[["Feature_Group", *metrics]].copy()
+    for metric in metrics:
+        clipped[metric] = clipped[metric].clip(lower=0)
+
+    grouped = clipped.groupby("Feature_Group", as_index=False).agg(
+        **{metric: (metric, lambda values: values.sum(min_count=1)) for metric in metrics},
+        Feature_Count=("Feature_Group", "size"),
+    )
+
+    rank_columns = []
+    for metric in metrics:
+        rank = f"{metric}_Percentile"
+        grouped[rank] = grouped[metric].rank(pct=True, ascending=True)
+        rank_columns.append(rank)
+    grouped["Consensus_Score"] = grouped[rank_columns].mean(axis=1, skipna=True)
+    grouped = grouped.sort_values("Consensus_Score", ascending=False).reset_index(drop=True)
+    grouped.insert(0, "Consensus_Rank", np.arange(1, len(grouped) + 1))
+
+    plot = grouped.sort_values("Consensus_Score", ascending=True)
+    colors = [
+        "#2f6f9f",
+        "#2a9d8f",
+        "#e9a03f",
+        "#c95f5f",
+        "#6f63b6",
+        "#6a8f3a",
+        "#8c6d5b",
+        "#5f7a8a",
+    ][: len(plot)]
+    fig, ax = plt.subplots(figsize=(12.5, max(5.5, 0.58 * len(plot) + 1.6)))
+    bars = ax.barh(plot["Feature_Group"], plot["Consensus_Score"], color=colors, alpha=0.96)
+    ax.set_xlim(0, 1)
+    ax.set_title("Consensus importance by feature group", fontsize=18, pad=12)
+    ax.set_xlabel("Consensus score across importance methods", fontsize=13)
+    ax.set_ylabel("")
+    ax.tick_params(axis="y", labelsize=13)
+    ax.tick_params(axis="x", labelsize=11)
+    ax.grid(axis="x", alpha=0.25)
+    ax.grid(axis="y", visible=False)
+    for spine in ["top", "right", "left"]:
+        ax.spines[spine].set_visible(False)
+    for bar, value in zip(bars, plot["Consensus_Score"]):
+        ax.text(
+            min(value + 0.015, 0.98),
+            bar.get_y() + bar.get_height() / 2,
+            f"{value:.2f}",
+            va="center",
+            ha="left" if value < 0.93 else "right",
+            fontsize=12,
+            color="#222222",
+        )
+    fig.tight_layout()
+    fig.savefig(path, dpi=240, bbox_inches="tight")
+    plt.close(fig)
+    return grouped
 
 def save_horizontal_bar(
     data: pd.DataFrame,
@@ -754,11 +829,17 @@ def run_final_feature_importance(
         ),
     ]
 
+    grouped_consensus = save_grouped_consensus_plot(
+        consensus, output / "consensus_grouped_features.png"
+    )
+
     domain = save_domain_plot(shap_source, output / "importance_by_domain.png")
     actionability = save_actionability_plot(domain, output / "importance_by_actionability.png")
+    grouped_consensus.to_csv(output / "consensus_grouped_features.csv", index=False)
     domain.to_csv(output / "domain_importance.csv", index=False)
     actionability.to_csv(output / "actionability_importance.csv", index=False)
     plot_paths.extend([
+        output / "consensus_grouped_features.png",
         output / "importance_by_domain.png",
         output / "importance_by_actionability.png",
     ])

@@ -5,6 +5,8 @@ import plotly.express as px
 import plotly.graph_objects as go
 import os
 import sys
+from pathlib import Path
+import joblib
 
 # Resolve all paths relative to this script's directory, not CWD
 _SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -112,7 +114,48 @@ st.title("Executive Turnover Dashboard")
 # Dynamic Dataset Selection & Caching
 # ---------------------------------------------------------------------------
 
-st.sidebar.title("??? Configuration")
+st.sidebar.title("Dashboard Configuration")
+
+
+def _source_label(value) -> str:
+    if isinstance(value, (list, tuple, set)):
+        return " + ".join(str(item) for item in value)
+    return str(value)
+
+
+@st.cache_data
+def discover_model_configurations() -> list[dict]:
+    configs = []
+    for artifact_path in sorted(Path("artifacts").glob("*.pkl")):
+        try:
+            artifact = joblib.load(artifact_path)
+        except Exception:
+            continue
+        if not (artifact.get("candidate") and artifact.get("feature_columns") and artifact.get("pipeline") is not None):
+            continue
+        train_sources = artifact.get("train_sources", ["file1", "file2"])
+        test_sources = artifact.get("test_sources", artifact.get("external_test_source", "file3"))
+        created_by = artifact.get("created_by", "final_modeling")
+        label = (
+            f"{artifact.get('candidate', artifact_path.stem)} | "
+            f"train: {_source_label(train_sources)} -> test: {_source_label(test_sources)}"
+        )
+        if artifact_path.name == FINAL_ARTIFACT_PATH.name:
+            label = "Selected final model | " + label
+        elif created_by == "ml_workbench":
+            label = "Workbench | " + label
+        configs.append({
+            "label": label,
+            "path": str(artifact_path),
+            "candidate": artifact.get("candidate", artifact_path.stem),
+            "train_sources": train_sources,
+            "test_sources": test_sources,
+            "created_by": created_by,
+        })
+    return configs
+
+
+model_configs = discover_model_configurations()
 dataset_specs, skipped_specs = discover_dataset_specs(include_root_excels=False)
 spec_by_tag = {spec.tag: spec for spec in dataset_specs}
 legacy_datasets = [
@@ -121,31 +164,32 @@ legacy_datasets = [
     if os.path.exists(f"output/predictions_{spec.tag}.xlsx")
 ]
 
-FINAL_DATASET_LABEL = "Final model (file3 external test)"
-dataset_options = []
-if FINAL_ARTIFACT_PATH.exists():
-    dataset_options.append(FINAL_DATASET_LABEL)
-dataset_options.extend(legacy_datasets)
+config_options = [config["label"] for config in model_configs]
+config_options.extend([f"Legacy dataset | {tag}" for tag in legacy_datasets])
 
-if not dataset_options:
-    st.error("No trained predictions found. Run `python scripts/train_final_models.py` for the final model or `python main.py --all` for legacy datasets.")
+if not config_options:
+    st.error("No trained predictions found. Run `python main.py` or train a model in `streamlit run ml_workbench_app.py`.")
     st.stop()
 
-selected_dataset = st.sidebar.selectbox("Select Dataset", dataset_options)
-is_final_dataset = selected_dataset == FINAL_DATASET_LABEL
+selected_config_label = st.sidebar.selectbox("Select Model Configuration", config_options)
+selected_model_config = next((config for config in model_configs if config["label"] == selected_config_label), None)
+is_final_dataset = selected_model_config is not None
 
 if is_final_dataset:
-    DATA_PATH = "output/final/file3_predictions.xlsx"
-    RAW_DATA_PATH = "prepared final file3 rows"
-    API_PATH = str(FINAL_ARTIFACT_PATH)
+    selected_dataset = selected_model_config["candidate"]
+    DATA_PATH = "generated from selected artifact"
+    RAW_DATA_PATH = "prepared selected test-source rows"
+    API_PATH = selected_model_config["path"]
+    st.sidebar.caption(f"Train: {_source_label(selected_model_config['train_sources'])}")
+    st.sidebar.caption(f"Test: {_source_label(selected_model_config['test_sources'])}")
 else:
+    selected_dataset = selected_config_label.replace("Legacy dataset | ", "")
     selected_spec = spec_by_tag[selected_dataset]
     DATA_PATH = f"output/predictions_{selected_dataset}.xlsx"
     RAW_DATA_PATH = str(selected_spec.path)
     fixed_model = f"artifacts/model_pipeline_{selected_dataset}_fixed.pkl"
     random_model = f"artifacts/model_pipeline_{selected_dataset}_random.pkl"
     API_PATH = fixed_model if os.path.exists(fixed_model) else random_model
-
 
 @st.cache_data
 def load_dashboard_data(filepath: str) -> pd.DataFrame:
@@ -181,6 +225,7 @@ if is_final_dataset:
     api = load_inference_api(API_PATH)
     final_metadata = final_bundle["metadata"]
     st.sidebar.caption(f"Model: {final_metadata['candidate']}")
+    st.sidebar.caption(f"Artifact: {os.path.basename(API_PATH)}")
 else:
     final_bundle = None
     final_metadata = {}
@@ -192,7 +237,7 @@ if dashboard_df.empty:
     if is_final_dataset:
         st.error(f"Final predictions could not be built from **{API_PATH}**.")
     else:
-        st.error(f"Predictions file **{DATA_PATH}** not found. Please run `python main.py --dataset {selected_dataset}` first.")
+        st.error(f"Predictions file **{DATA_PATH}** not found for legacy dataset `{selected_dataset}`.")
     st.stop()
 
 
