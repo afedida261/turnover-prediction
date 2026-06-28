@@ -37,15 +37,17 @@ def positive_probabilities(artifact: dict, X: pd.DataFrame) -> np.ndarray:
     return np.asarray(probabilities[:, 1], dtype=float)
 
 
-@lru_cache(maxsize=2)
+@lru_cache(maxsize=16)
 def load_final_dashboard_bundle(artifact_path: str = str(FINAL_ARTIFACT_PATH)) -> dict:
     artifact = joblib.load(artifact_path)
-    prepared = prepare_turnover_data()
+    train_sources = artifact.get("train_sources", ["file1", "file2"])
+    test_sources = artifact.get("test_sources", artifact.get("external_test_source", "file3"))
+    prepared = prepare_turnover_data(train_sources=train_sources, test_sources=test_sources)
     columns = artifact["feature_columns"]
 
     raw_frame = prepared.test_frame.reset_index(drop=True).copy()
     model_frame = prepared.X_test.reset_index(drop=True).copy()
-    probabilities = positive_probabilities(artifact, model_frame[columns])
+    probabilities = positive_probabilities(artifact, model_frame)
 
     app_frame = raw_frame.copy()
     app_frame["turnover_probability"] = probabilities
@@ -83,9 +85,14 @@ def load_final_dashboard_bundle(artifact_path: str = str(FINAL_ARTIFACT_PATH)) -
         "raw_df": raw_for_app,
         "prepared": prepared,
         "metadata": {
-            "dataset_label": "Final model - file3 external test",
+            "dataset_label": (
+                f"{artifact.get('candidate', 'final model')} - "
+                f"{test_sources if isinstance(test_sources, str) else ', '.join(test_sources)} test"
+            ),
             "artifact_path": artifact_path,
             "candidate": artifact.get("candidate", "final model"),
+            "train_sources": train_sources,
+            "test_sources": test_sources,
             "decision_threshold": float(artifact.get("decision_threshold", 0.5)),
         },
     }

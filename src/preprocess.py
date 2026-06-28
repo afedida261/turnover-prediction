@@ -339,6 +339,8 @@ def model_feature_columns(
 def prepare_turnover_data(
     paths: Mapping[str, str | Path] | None = None,
     *,
+    train_sources: Iterable[str] = TRAIN_SOURCES,
+    test_sources: Iterable[str] | str = EXTERNAL_TEST_SOURCE,
     excluded_model_columns: Iterable[str] = DEFAULT_EXCLUDED_MODEL_COLUMNS,
 ) -> PreparedTurnoverData:
     raw = load_source_frames(paths)
@@ -352,11 +354,26 @@ def prepare_turnover_data(
     context_columns = [c for c in ["source", "year_date"] if c in history.columns]
     X_columns = list(dict.fromkeys(feature_columns + context_columns))
 
-    train = history[history["source"].isin(TRAIN_SOURCES)].copy()
-    test = history[history["source"].eq(EXTERNAL_TEST_SOURCE)].copy()
-    if test.empty:
-        raise ValueError("External test source file3 is empty after cleaning.")
+    train_source_set = set(train_sources)
+    if isinstance(test_sources, str):
+        test_source_set = {test_sources}
+    else:
+        test_source_set = set(test_sources)
+    available_sources = set(history["source"].dropna().astype(str).unique())
+    unknown_train = train_source_set - available_sources
+    unknown_test = test_source_set - available_sources
+    if unknown_train or unknown_test:
+        raise ValueError(
+            "Unknown source selection: "
+            f"train={sorted(unknown_train)}, test={sorted(unknown_test)}"
+        )
 
+    train = history[history["source"].isin(train_source_set)].copy()
+    test = history[history["source"].isin(test_source_set)].copy()
+    if train.empty:
+        raise ValueError("Training source selection is empty after cleaning.")
+    if test.empty:
+        raise ValueError("Test source selection is empty after cleaning.")
     return PreparedTurnoverData(
         train_frame=train,
         test_frame=test,

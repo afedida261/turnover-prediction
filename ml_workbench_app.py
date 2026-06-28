@@ -1,4 +1,4 @@
-﻿import os
+import os
 import sys
 import time
 
@@ -19,8 +19,7 @@ except ImportError as e:
     st.stop()
 
 
-RAW_DATA_PATH = "data/raw/first_file.xlsx"
-SPLIT_DIR = "split"
+FINAL_WORKFLOW_LABEL = "file1 + file2 validation -> file3 external test"
 
 
 def _require_access() -> None:
@@ -32,7 +31,7 @@ def _require_access() -> None:
     if st.session_state.get("ml_workbench_authorized"):
         return
 
-    st.title("ML Development Workbench")
+    st.title("Final ML Workbench")
     st.warning("Restricted site. Enter access key.")
     entered = st.text_input("Access Key", type="password")
     if st.button("Unlock"):
@@ -54,63 +53,26 @@ def ensure_ml_state() -> None:
     if "ml_threshold" not in st.session_state:
         st.session_state["ml_threshold"] = 0.5
     if "ml_split_mode" not in st.session_state:
-        st.session_state["ml_split_mode"] = "random"
+        st.session_state["ml_split_mode"] = "final"
     if "ml_ranking_metric" not in st.session_state:
-        st.session_state["ml_ranking_metric"] = "AUC_ROC"
+        st.session_state["ml_ranking_metric"] = "PR_AUC"
     if "ml_seed" not in st.session_state:
         st.session_state["ml_seed"] = 42
     if "ml_test_size" not in st.session_state:
-        st.session_state["ml_test_size"] = 0.2
+        st.session_state["ml_test_size"] = 0.0
     if "ml_val_size" not in st.session_state:
-        st.session_state["ml_val_size"] = 0.25
+        st.session_state["ml_val_size"] = 0.20
     if "ml_active_job_id" not in st.session_state:
         st.session_state["ml_active_job_id"] = ""
     if "ml_drop_feature_groups" not in st.session_state:
         st.session_state["ml_drop_feature_groups"] = []
+    if "ml_train_sources" not in st.session_state:
+        st.session_state["ml_train_sources"] = ["file1", "file2"]
+    if "ml_test_sources" not in st.session_state:
+        st.session_state["ml_test_sources"] = ["file3"]
 
 
-# Feature groups the user can exclude. Each group maps to a set of column
-# prefixes that will be dropped from X before training.  The original columns
-# (and their _mean, _std, _trend, engineered derivatives) all match.
-FEATURE_GROUPS = {
-    "Tenure": {
-        "prefixes": ["vetek_months", "tenure_years", "tenure_ratio", "is_new_employee", "is_senior", "career_start_age", "data_maturity", "num_periods"],
-        "description": "Tenure in months and derived features (years, ratio, new/senior flags, career start age)",
-    },
-    "Age": {
-        "prefixes": ["age", "is_young", "is_pre_retirement"],
-        "description": "Employee age and derived flags (young <30, pre-retirement >55)",
-    },
-    "Salary": {
-        "prefixes": ["avg_Payment", "stdevp_Payment", "Median_Payment", "change_in_salary_bySHKL", "salary_skewness", "salary_cv", "salary_change_pct", "Sahar"],
-        "description": "Payment, salary change, salary freeze flag, and salary-derived features",
-    },
-    "Workload": {
-        "prefixes": ["avg_omes", "stdevp_omes", "Median_omes", "WorkHours", "workload_stability", "workload_skewness", "workload_pay_ratio"],
-        "description": "Workload (omes), work-hours change, and derived stability/skewness features",
-    },
-    "Sick Days": {
-        "prefixes": ["avg_illness", "stdevp_illness", "Median_illness", "illness_variability", "hedrut"],
-        "description": "Sick days, absence flag, and illness variability",
-    },
-    "Manager": {
-        "prefixes": ["manager_Code", "count_managers", "Maneger", "manager_change_rate"],
-        "description": "Manager code, manager changes, and manager change rate",
-    },
-    "Distance": {
-        "prefixes": ["distance_to_work", "Distance", "long_commute"],
-        "description": "Commute distance, distance change flag, and long-commute indicator",
-    },
-    "Role & Dept": {
-        "prefixes": ["tafkidCode", "Tafkid", "Mahala", "Seif", "Maamad"],
-        "description": "Role code, role/department/rank change flags, budget section",
-    },
-    "Demographics": {
-        "prefixes": ["gender_", "EMP_Matzav_Mishpachti_", "Yishuv_", "Semel_Yishuv", "TeurGroupHscm_", "children", "MZV_Flag"],
-        "description": "Gender, marital status, city, employment type, children, MZV flag",
-    },
-}
-
+FEATURE_GROUPS = ml_workbench.FEATURE_GROUPS
 
 def _node_state(stage_key: str, current_stage: str, job_status: str, model_id: str = None, active_model: str = None, completed_models: list = None) -> str:
     """Return 'pending', 'active', 'completed', or 'failed' for a pipeline node."""
@@ -332,7 +294,7 @@ def render_pipeline_visualization(job: dict) -> None:
 
 def _render_model_selection(model_options):
     st.markdown("### Model Selection")
-    st.caption("Enable or disable models for this run. Hover the help icon for each model summary.")
+    st.caption("Models that cannot fit the selected training sources are disabled automatically.")
 
     selected_models = []
     model_cols = st.columns(2)
@@ -340,8 +302,11 @@ def _render_model_selection(model_options):
     for idx, model_meta in enumerate(model_options):
         model_id = model_meta["id"]
         widget_key = f"ml_model_enabled_{model_id}"
+        disabled = bool(model_meta.get("disabled", False))
         if widget_key not in st.session_state:
-            st.session_state[widget_key] = model_id in st.session_state["ml_selected_models"]
+            st.session_state[widget_key] = model_id in st.session_state["ml_selected_models"] and not disabled
+        if disabled:
+            st.session_state[widget_key] = False
 
         with model_cols[idx % 2]:
             enabled = st.checkbox(
@@ -349,8 +314,9 @@ def _render_model_selection(model_options):
                 value=bool(st.session_state[widget_key]),
                 key=widget_key,
                 help=model_meta.get("description", ""),
+                disabled=disabled,
             )
-            if enabled:
+            if enabled and not disabled:
                 selected_models.append(model_id)
 
     st.session_state["ml_selected_models"] = selected_models
@@ -395,6 +361,8 @@ def _render_sidebar_hyperparams(model_options):
             if not params:
                 st.caption("No tunable hyperparameters for this model.")
             for param_name, spec in params.items():
+                st.session_state["ml_hyperparams"].setdefault(model_id, {})
+                st.session_state["ml_hyperparams"][model_id].setdefault(param_name, spec["default"])
                 current_value = st.session_state["ml_hyperparams"][model_id][param_name]
                 widget_key = f"ml_hp_{model_id}_{param_name}"
                 if spec["type"] == "int":
@@ -420,6 +388,42 @@ def _render_sidebar_hyperparams(model_options):
                     st.session_state["ml_hyperparams"][model_id][param_name] = float(updated)
 
 
+
+def _render_source_selection() -> None:
+    st.markdown("### Data Sources")
+    st.caption("Choose which files train the models and which files evaluate them. Validation is always split from the selected training sources.")
+
+    source_options = ml_workbench.SOURCE_OPTIONS
+    col_train, col_test = st.columns(2)
+    with col_train:
+        train_sources = st.multiselect(
+            "Training Sources",
+            options=source_options,
+            default=[source for source in st.session_state["ml_train_sources"] if source in source_options],
+            help="Selected sources are cleaned together and then split into inner-train and validation employees.",
+        )
+    with col_test:
+        test_sources = st.multiselect(
+            "Test Sources",
+            options=source_options,
+            default=[source for source in st.session_state["ml_test_sources"] if source in source_options],
+            help="Selected sources are evaluated after validation selects the best model.",
+        )
+
+    if not train_sources:
+        train_sources = ["file1"]
+        st.warning("Select at least one training source. Using file1 for now.")
+    if not test_sources:
+        test_sources = train_sources.copy()
+        st.warning("Select at least one test source. Mirroring training sources for now.")
+
+    st.session_state["ml_train_sources"] = train_sources
+    st.session_state["ml_test_sources"] = test_sources
+
+    allowed = set(ml_workbench.allowed_model_ids(train_sources))
+    st.session_state["ml_selected_models"] = [
+        model_id for model_id in st.session_state["ml_selected_models"] if model_id in allowed
+    ]
 def _render_feature_selection():
     st.markdown("### Feature Selection")
     st.caption(
@@ -451,7 +455,7 @@ def _render_feature_selection():
 def _render_overfit_indicators(result_df: pd.DataFrame, selected_metrics: list):
     """Show train-vs-val-vs-test gap analysis for overfitting detection."""
     # Key metrics to compare (skip informational ones)
-    key_metrics = [m for m in ["AUC_ROC", "F1", "Recall", "Precision", "Recall@Top20%"]
+    key_metrics = [m for m in ["AUC", "F1", "Recall", "Precision", "Recall@Top20%"]
                    if m in selected_metrics]
     if not key_metrics:
         return
@@ -546,7 +550,7 @@ def _render_results_section(job: dict) -> None:
 
     config = job.get("config", {})
     selected_metrics = config.get("selected_metrics", list(ml_workbench.DEFAULT_METRICS))
-    ranking_metric = config.get("ranking_metric", "AUC_ROC")
+    ranking_metric = config.get("ranking_metric", "PR_AUC")
     best_model_name = job.get("best_model", "")
 
     result_df = pd.DataFrame(results)
@@ -563,8 +567,9 @@ def _render_results_section(job: dict) -> None:
         st.metric("Best Model", best_model_name)
     with info_cols[2]:
         best_row = next((r for r in results if r.get("Model") == best_model_name), None)
-        best_val = f"{best_row.get(ranking_metric, 0):.4f}" if best_row else "N/A"
-        st.metric(f"Best {ranking_metric}", best_val)
+        best_metric_value = best_row.get(f"Val_{ranking_metric}", best_row.get(ranking_metric, 0)) if best_row else None
+        best_val = f"{float(best_metric_value):.4f}" if best_metric_value is not None else "N/A"
+        st.metric(f"Best Val {ranking_metric}", best_val)
     with info_cols[3]:
         st.metric("Total Samples", split_info.get("total", "N/A"))
 
@@ -770,30 +775,36 @@ def _render_results_section(job: dict) -> None:
 def render_ml_workbench() -> None:
     ensure_ml_state()
 
-    st.title("ML Development Workbench")
-    st.markdown("Configure, train, and compare turnover models without coding.")
+    st.title("Final ML Workbench")
+    st.markdown("Configure source splits, tune candidate models, and compare turnover experiments without coding.")
 
-    model_options = ml_workbench.list_model_options()
+    model_options = ml_workbench.list_model_options(st.session_state["ml_train_sources"])
 
     top_controls1, top_controls2 = st.columns(2)
     with top_controls1:
         if st.button("Select All Models", width="stretch"):
-            st.session_state["ml_selected_models"] = ml_workbench.default_model_ids()
+            st.session_state["ml_selected_models"] = ml_workbench.allowed_model_ids(st.session_state["ml_train_sources"])
             for model_meta in model_options:
                 st.session_state[f"ml_model_enabled_{model_meta['id']}"] = True
             st.rerun()
     with top_controls2:
         if st.button("Reset Defaults", width="stretch"):
-            st.session_state["ml_selected_models"] = ml_workbench.default_model_ids()
+            st.session_state["ml_selected_models"] = ml_workbench.default_model_ids(st.session_state["ml_train_sources"])
             st.session_state["ml_selected_metrics"] = list(ml_workbench.DEFAULT_METRICS)
             st.session_state["ml_hyperparams"] = ml_workbench.default_hyperparams()
             st.session_state["ml_threshold"] = 0.7
-            st.session_state["ml_split_mode"] = "random"
-            st.session_state["ml_ranking_metric"] = "AUC_ROC"
+            st.session_state["ml_split_mode"] = "final"
+            st.session_state["ml_ranking_metric"] = "PR_AUC"
             st.session_state["ml_seed"] = 42
-            st.session_state["ml_test_size"] = 0.2
-            st.session_state["ml_val_size"] = 0.25
+            st.session_state["ml_test_size"] = 0.0
+            st.session_state["ml_val_size"] = 0.20
+            st.session_state["ml_train_sources"] = ["file1", "file2"]
+            st.session_state["ml_test_sources"] = ["file3"]
             st.rerun()
+
+    st.markdown("---")
+    _render_source_selection()
+    model_options = ml_workbench.list_model_options(st.session_state["ml_train_sources"])
 
     st.markdown("---")
     _render_model_selection(model_options)
@@ -808,46 +819,21 @@ def render_ml_workbench() -> None:
     st.session_state["ml_ranking_metric"] = st.selectbox(
         "Primary Metric for Best Model",
         options=st.session_state["ml_selected_metrics"] or ml_workbench.SUPPORTED_METRICS,
-        index=0,
-        help="Model ranking uses this metric on the validation set.",
+        index=(st.session_state["ml_selected_metrics"] or ml_workbench.SUPPORTED_METRICS).index(st.session_state["ml_ranking_metric"]) if st.session_state["ml_ranking_metric"] in (st.session_state["ml_selected_metrics"] or ml_workbench.SUPPORTED_METRICS) else 0,
+        help="The workbench ranks models by this metric on the validation split created from the selected training sources.",
     )
 
-    st.session_state["ml_threshold"] = st.slider(
-        "Classification Threshold",
-        min_value=0.05,
-        max_value=0.95,
-        value=float(st.session_state["ml_threshold"]),
-        step=0.01,
-        help="Employees with predicted probability >= threshold are classified as likely leavers.",
-    )
+    workflow_label = f"Workflow: {', '.join(st.session_state['ml_train_sources'])} train/validation -> {', '.join(st.session_state['ml_test_sources'])} test"
+    st.info(workflow_label)
 
-    split_col1, split_col2, split_col3 = st.columns(3)
-    with split_col1:
-        st.session_state["ml_split_mode"] = st.selectbox(
-            "Split Strategy",
-            options=["random", "fixed"],
-            format_func=lambda x: "Random 60/20/20" if x == "random" else "Fixed ID Split",
-            index=0 if st.session_state["ml_split_mode"] == "random" else 1,
-            help="Fixed uses split/train_ids.txt and split/test_ids.txt; random uses configurable train/val/test fractions.",
-        )
-    with split_col2:
-        st.session_state["ml_test_size"] = st.slider(
-            "Test Size",
-            min_value=0.10,
-            max_value=0.40,
-            value=float(st.session_state["ml_test_size"]),
-            step=0.05,
-            disabled=st.session_state["ml_split_mode"] == "fixed",
-        )
-    with split_col3:
-        st.session_state["ml_val_size"] = st.slider(
-            "Validation Size",
-            min_value=0.10,
-            max_value=0.40,
-            value=float(st.session_state["ml_val_size"]),
-            step=0.05,
-            disabled=st.session_state["ml_split_mode"] == "fixed",
-        )
+    st.session_state["ml_val_size"] = st.slider(
+        "Validation Size within Training Sources",
+        min_value=0.10,
+        max_value=0.40,
+        value=float(st.session_state["ml_val_size"]),
+        step=0.05,
+        help="Employee-grouped validation split inside the selected training sources. The selected test sources are evaluated after model selection.",
+    )
 
     st.session_state["ml_seed"] = st.number_input(
         "Random Seed",
@@ -875,16 +861,15 @@ def render_ml_workbench() -> None:
             job_config = {
                 "selected_models": st.session_state["ml_selected_models"],
                 "selected_metrics": st.session_state["ml_selected_metrics"],
-                "threshold": st.session_state["ml_threshold"],
-                "split_mode": st.session_state["ml_split_mode"],
-                "test_size": st.session_state["ml_test_size"],
                 "val_size": st.session_state["ml_val_size"],
+                "train_sources": st.session_state["ml_train_sources"],
+                "test_sources": st.session_state["ml_test_sources"],
                 "random_seed": st.session_state["ml_seed"],
                 "ranking_metric": st.session_state["ml_ranking_metric"],
                 "hyperparams": st.session_state["ml_hyperparams"],
                 "drop_feature_groups": st.session_state["ml_drop_feature_groups"],
             }
-            new_job_id = ml_workbench.start_training_job(job_config, data_path=RAW_DATA_PATH, split_dir=SPLIT_DIR)
+            new_job_id = ml_workbench.start_training_job(job_config)
             st.session_state["ml_active_job_id"] = new_job_id
             st.success(f"Training job started: {new_job_id}")
             st.rerun()
@@ -953,7 +938,7 @@ def render_ml_workbench() -> None:
 
 
 if __name__ == "__main__":
-    st.set_page_config(page_title="ML Development Workbench", page_icon="M", layout="wide")
+    st.set_page_config(page_title="Final ML Workbench", page_icon="M", layout="wide")
     _require_access()
     render_ml_workbench()
 

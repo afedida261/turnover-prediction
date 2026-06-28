@@ -20,11 +20,11 @@ import pandas as pd
 import seaborn as sns
 from sklearn.metrics import average_precision_score, roc_auc_score
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from scripts.analyze_final_feature_importance import (
+from src.analysis.final_feature_importance import (
     add_classification,
     classify_domain,
     dense_array,

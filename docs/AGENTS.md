@@ -10,24 +10,30 @@ The final project workflow is the EDA-informed file1/file2/file3 pipeline. Files
 
 ## Current entry points
 
-- `imputations.py`: compatibility wrapper for payment imputation.
-- `preprocess.py`: compatibility wrapper for final preprocessing.
-- `train_final_models.py`: compatibility wrapper for final model training.
+Root entry points are intentionally limited to:
+
+- `main.py`: final EDA-driven model training entry point.
 - `app.py`: Streamlit executive dashboard using final artifacts and what-if simulation.
-- `scripts/train_final_models.py`: final model-training script.
-- `scripts/analyze_final_feature_importance.py`: global feature-importance outputs and graphs.
-- `scripts/analyze_grouped_actionable_importance.py`: actionable importance within tenure and age groups.
-- `scripts/preprocessing_audit.py`: source schema, missingness, and preprocessing audit utility.
+- `ml_workbench_app.py`: Streamlit ML workbench for final file1/file2/file3 candidate runs.
+
+Supporting utilities now live under `src/analysis/`. Obsolete standalone wrappers and legacy scripts should stay out of the active root/script layout:
+
+- `src/analysis/final_feature_importance.py`: global feature-importance outputs and graphs.
+- `src/analysis/grouped_actionable_importance.py`: actionable importance within tenure and age groups.
+- `src/analysis/preprocessing_audit.py`: source schema, missingness, and preprocessing audit utility.
+
+Compatibility wrappers such as root-level `imputations.py`, `preprocess.py`, and `train_final_models.py` should not be reintroduced. Regenerate artifacts after refactors instead of preserving stale pickle import paths.
 
 ## Main commands
 
 ```powershell
-python imputations.py
-python preprocess.py
-python train_final_models.py
-python scripts/analyze_final_feature_importance.py
-python scripts/analyze_grouped_actionable_importance.py
+python -m src.imputations
+python -m src.preprocess
+python main.py
+python -m src.analysis.final_feature_importance
+python -m src.analysis.grouped_actionable_importance
 streamlit run app.py
+streamlit run ml_workbench_app.py
 ```
 
 To build the final report:

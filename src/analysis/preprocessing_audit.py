@@ -4,7 +4,7 @@ import sys
 
 import pandas as pd
 
-sys.path.append(str(Path(__file__).resolve().parents[1]))
+sys.path.append(str(Path(__file__).resolve().parents[2]))
 
 from src.config import TARGET_COL
 from src.datasets import discover_dataset_specs, read_excel_with_header_detection

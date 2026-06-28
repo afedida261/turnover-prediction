@@ -16,15 +16,16 @@ The final workflow is EDA-driven and centered on the cleaned file1/file2/file3 m
 ## Main commands
 
 ```powershell
-python imputations.py
-python preprocess.py
-python train_final_models.py
-python scripts/analyze_final_feature_importance.py
-python scripts/analyze_grouped_actionable_importance.py
+python -m src.imputations
+python -m src.preprocess
+python main.py
+python -m src.analysis.final_feature_importance
+python -m src.analysis.grouped_actionable_importance
 streamlit run app.py
+streamlit run ml_workbench_app.py
 ```
 
-The root-level `imputations.py`, `preprocess.py`, and `train_final_models.py` files are compatibility wrappers. The implementation lives in `src/` and `scripts/`.
+Root-level compatibility wrappers were removed. The implementation lives under `src/`, with active analysis utilities under `src/analysis/`. Obsolete standalone scripts were removed from the active tree.
 
 ## Final outputs
 
@@ -42,11 +43,12 @@ The root-level `imputations.py`, `preprocess.py`, and `train_final_models.py` fi
 - `src/final_modeling.py`: final model training and evaluation utilities.
 - `src/final_dashboard.py`: helpers that connect final artifacts to the dashboard.
 - `src/inference.py`: individual prediction and what-if inference API.
-- `scripts/train_final_models.py`: final model training entry point.
-- `scripts/analyze_final_feature_importance.py`: global importance and plots.
-- `scripts/analyze_grouped_actionable_importance.py`: actionable importance within age and tenure groups.
-- `scripts/preprocessing_audit.py`: source-schema and preprocessing audit utility.
+- `main.py`: final model training entry point.
+- `src/analysis/final_feature_importance.py`: global importance and plots.
+- `src/analysis/grouped_actionable_importance.py`: actionable importance within age and tenure groups.
+- `src/analysis/preprocessing_audit.py`: source-schema and preprocessing audit utility.
 - `app.py`: Streamlit dashboard.
+- `ml_workbench_app.py`: Streamlit workbench for configurable final-workflow training runs.
 
 ## Modeling notes
 
