@@ -57,20 +57,65 @@ SUPPORTED_METRICS: list[str] = [
 DEFAULT_METRICS: list[str] = ["PR_AUC", "AUC", "F1", "Recall@Top20%", "Precision@Top20%"]
 
 METRIC_TOOLTIPS: dict[str, str] = {
-    "AUC": "ROC-AUC on the validation/test split; threshold-independent ranking quality.",
-    "PR_AUC": "Average precision / PR-AUC on the selected validation/test split.",
-    "F1": "F1 at the validation-selected decision threshold.",
-    "Precision": "Among predicted leavers, the share that truly left.",
-    "Recall": "Among true leavers, the share caught by the model.",
-    "Balanced_Accuracy": "Mean of sensitivity and specificity at the selected threshold.",
-    "Log_Loss": "Probability calibration loss; lower is better.",
-    "Brier": "Mean squared probability error; lower is better.",
-    "Recall@Top10%": "Share of leavers captured in the highest-risk 10% of rows.",
-    "Precision@Top10%": "Leave rate inside the highest-risk 10% of rows.",
-    "Recall@Top20%": "Share of leavers captured in the highest-risk 20% of rows.",
-    "Precision@Top20%": "Leave rate inside the highest-risk 20% of rows.",
-    "Recall@Top30%": "Share of leavers captured in the highest-risk 30% of rows.",
-    "Precision@Top30%": "Leave rate inside the highest-risk 30% of rows.",
+    "AUC": (
+        "ROC-AUC — ranking quality across every threshold (0.5 = random, 1.0 = perfect). "
+        "Use to compare overall separability between leavers and stayers. "
+        "Can look optimistic on imbalanced data, so read it together with PR-AUC."
+    ),
+    "PR_AUC": (
+        "Precision-Recall AUC (average precision). Best headline metric for rare-event data "
+        "like turnover: it focuses on the positive (leaver) class and ignores the easy true negatives. "
+        "Use this as your primary ranking metric when leavers are a small minority."
+    ),
+    "F1": (
+        "Harmonic mean of Precision and Recall at the chosen decision threshold. "
+        "Use when false positives and false negatives are roughly equally costly and you want "
+        "one balanced number. Sensitive to the threshold."
+    ),
+    "Precision": (
+        "Of the employees the model flags as leavers, the share who actually leave. "
+        "Use when acting on a flag is expensive (e.g. costly retention offers) and you want to avoid false alarms."
+    ),
+    "Recall": (
+        "Of the employees who actually leave, the share the model catches (sensitivity). "
+        "Use when MISSING a leaver is the expensive mistake and you want maximum coverage, even at the cost of extra false alarms."
+    ),
+    "Balanced_Accuracy": (
+        "Average of recall on leavers and recall on stayers. "
+        "Use instead of plain accuracy on imbalanced data, where a 'predict nobody leaves' model would look deceptively good."
+    ),
+    "Log_Loss": (
+        "Penalises confident-but-wrong probabilities. Use to judge how well-calibrated and trustworthy "
+        "the probability scores are (not just the ranking). Lower is better."
+    ),
+    "Brier": (
+        "Mean squared error between predicted probabilities and actual 0/1 outcomes. "
+        "Use as a calibration check — do the % risks mean what they say? Lower is better."
+    ),
+    "Recall@Top10%": (
+        "Of all leavers, the share who fall inside the highest-risk 10% of employees. "
+        "Use when HR can only act on a short list: 'if we review the riskiest 10%, how many future leavers do we reach?'"
+    ),
+    "Precision@Top10%": (
+        "Within the highest-risk 10% list, the share who actually leave. "
+        "Use to gauge how clean/actionable that top-10% shortlist is (how much effort is 'wasted' on stayers)."
+    ),
+    "Recall@Top20%": (
+        "Of all leavers, the share inside the highest-risk 20% of employees. "
+        "Use for a mid-size intervention list: how many leavers a top-20% review would capture."
+    ),
+    "Precision@Top20%": (
+        "Within the highest-risk 20% list, the share who actually leave. "
+        "Use to judge how efficient a top-20% intervention program would be."
+    ),
+    "Recall@Top30%": (
+        "Of all leavers, the share inside the highest-risk 30% of employees. "
+        "Use for a broad intervention list where coverage matters more than efficiency."
+    ),
+    "Precision@Top30%": (
+        "Within the highest-risk 30% list, the share who actually leave. "
+        "Use to see how quickly precision decays as you widen the intervention list."
+    ),
 }
 
 MODEL_PARAM_SPECS: dict[str, dict[str, dict[str, Any]]] = {
@@ -95,10 +140,52 @@ MODEL_PARAM_SPECS: dict[str, dict[str, dict[str, Any]]] = {
 }
 
 MODEL_REGISTRY: dict[str, dict[str, Any]] = {}
+
+# Short, plain-language explanation of each model family for the UI tooltips.
+MODEL_FAMILY_INFO: dict[str, str] = {
+    "Logistic Regression": (
+        "Linear model (generalized linear model family). Fits a weighted sum of the features "
+        "through a sigmoid to output a probability. Fast, stable, and highly interpretable "
+        "(each feature has a signed coefficient); a strong baseline, but assumes mostly "
+        "linear, additive effects."
+    ),
+    "Random Forest": (
+        "Bagging ensemble of decision trees (bagging family). Averages many de-correlated trees "
+        "trained on bootstrap samples. Captures non-linear effects and feature interactions, "
+        "is robust to outliers, and needs little tuning; can be less sharp on very rare signals."
+    ),
+    "XGBoost": (
+        "Gradient-boosted decision trees (boosting family). Builds trees sequentially, each one "
+        "correcting the previous errors. Usually the strongest performer on tabular data and "
+        "handles missing values natively, but needs more tuning and can overfit if unregularised."
+    ),
+}
+
+# What each payment-imputation strategy does to the salary features.
+PAYMENT_STRATEGY_INFO: dict[str, str] = {
+    "learned_imputation": (
+        "Missing salary values are filled by a learned 'similar-employee' imputer before training, "
+        "with extra missing-value indicator flags."
+    ),
+    "native_missing": (
+        "Missing salary values are left untouched and handled natively by the model "
+        "(e.g. XGBoost's built-in missing-value splits)."
+    ),
+    "no_payment": (
+        "Salary/payment features are dropped entirely — useful to test performance without pay data "
+        "or when pay records are unreliable."
+    ),
+}
+
 for spec in candidate_specs():
     model_prefix = {"Logistic Regression": "LR", "Random Forest": "RF", "XGBoost": "XGB"}[spec.model_name]
     payment_label = spec.payment_strategy.replace("_", " ").title()
     model_id = slugify(spec.name)
+    family_info = MODEL_FAMILY_INFO.get(spec.model_name, spec.model_name)
+    payment_info = PAYMENT_STRATEGY_INFO.get(
+        spec.payment_strategy,
+        f"Payment strategy: {spec.payment_strategy.replace('_', ' ')}.",
+    )
     MODEL_REGISTRY[model_id] = {
         "label": f"{spec.model_name} - {payment_label}",
         "icon": model_prefix,
@@ -109,7 +196,7 @@ for spec in candidate_specs():
             "XGBoost__native_missing",
             "XGBoost__no_payment",
         },
-        "description": f"{spec.model_name} with {spec.payment_strategy.replace('_', ' ')}.",
+        "description": f"{family_info}\n\nSalary handling ({payment_label}): {payment_info}",
         "params": MODEL_PARAM_SPECS[spec.model_name],
         "spec": spec,
     }
