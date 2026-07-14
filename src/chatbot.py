@@ -1,11 +1,12 @@
 from __future__ import annotations
 
+import json
 import os
 import sqlite3
 from typing import Any, Optional
 
 import pandas as pd
-from dotenv import load_dotenv
+from dotenv import load_dotenv, dotenv_values, find_dotenv
 from google import genai
 from google.genai import types
 
@@ -15,6 +16,48 @@ from src.analysis.local_explain import (
 )
 
 load_dotenv()
+
+
+def _resolve_provider_keys() -> tuple[Optional[str], Optional[str]]:
+    """Resolve the Gemini and OpenAI keys, treating the .env FILE as the source
+    of truth. If a .env file exists, only keys actually present (uncommented) in
+    it are used — so commenting out GEMINI_API_KEY reliably switches to OpenAI,
+    even if a stale key lingers in the OS environment. If no .env file is found,
+    fall back to the process environment (useful for deployments)."""
+    file_env: dict[str, str] | None = None
+    try:
+        path = find_dotenv(usecwd=True)
+        if path:
+            file_env = dotenv_values(path)
+    except Exception:
+        file_env = None
+
+    if file_env is not None:
+        gemini_key = (
+            file_env.get("GEMINI_API_KEY")
+            or file_env.get("gimini_api_key")
+            or file_env.get("GIMINI_API_KEY")
+        )
+        openai_key = (
+            file_env.get("OPENAI_API_KEY")
+            or file_env.get("OPEN_AI_API_KEY")
+            or file_env.get("OPEN_AI_KEY")
+            or file_env.get("OPENAI_KEY")
+        )
+    else:
+        gemini_key = (
+            os.getenv("GEMINI_API_KEY")
+            or os.getenv("gimini_api_key")
+            or os.getenv("GIMINI_API_KEY")
+        )
+        openai_key = (
+            os.getenv("OPENAI_API_KEY")
+            or os.getenv("OPEN_AI_API_KEY")
+            or os.getenv("OPEN_AI_KEY")
+            or os.getenv("OPENAI_KEY")
+        )
+
+    return (gemini_key or None), (openai_key or None)
 
 # ---------------------------------------------------------------------------
 # System Prompt
@@ -730,6 +773,158 @@ def run_sql_query(dashboard_df: pd.DataFrame, query: str) -> str:
 
 
 # ---------------------------------------------------------------------------
+# OpenAI tool schemas + agent loop (fallback provider)
+# ---------------------------------------------------------------------------
+def _openai_tool_schemas() -> list[dict[str, Any]]:
+    """JSON-schema declarations mirroring the chatbot tools, for OpenAI function calling."""
+
+    def f(name: str, desc: str, properties: dict, required: list | None = None) -> dict:
+        return {
+            "type": "function",
+            "function": {
+                "name": name,
+                "description": desc,
+                "parameters": {
+                    "type": "object",
+                    "properties": properties,
+                    "required": required or [],
+                },
+            },
+        }
+
+    return [
+        f("explain_employee",
+          "Explain WHY a specific employee's turnover risk is high or low using SHAP feature contributions.",
+          {"employee_id": {"type": "string", "description": "The Employee ID."}},
+          ["employee_id"]),
+        f("top_risk_drivers",
+          "Rank the features that drive turnover risk across the whole organisation (SHAP global importance).",
+          {"top_n": {"type": "integer", "description": "How many drivers to return (default 15)."}}),
+        f("feature_correlations",
+          "Show which features correlate with turnover risk (numeric correlations + categorical risk spreads).",
+          {"top_n": {"type": "integer", "description": "How many features to return (default 12)."}}),
+        f("high_risk_employees",
+          "List the highest-risk employees, optionally within a department.",
+          {"department": {"type": "string", "description": "Department name; empty for company-wide."},
+           "top_n": {"type": "integer", "description": "How many to return (default 5)."}}),
+        f("employee_risk",
+          "Return the current risk score and category for one employee by ID.",
+          {"employee_id": {"type": "string", "description": "The Employee ID."}},
+          ["employee_id"]),
+        f("department_summary",
+          "Summarise turnover risk for a department (headcount, avg risk, distribution).",
+          {"department": {"type": "string", "description": "Department name."}},
+          ["department"]),
+        f("rank_departments",
+          "Rank departments by average turnover risk.",
+          {"top_n": {"type": "integer", "description": "How many departments (default 10)."},
+           "order": {"type": "string", "enum": ["desc", "asc"], "description": "'desc' = riskiest first."}}),
+        f("risk_by_group",
+          "Average turnover risk grouped by any column (e.g. 'Job Rank', 'Contract Type', 'City of Residence').",
+          {"group_column": {"type": "string", "description": "Column to group by."},
+           "top_n": {"type": "integer", "description": "How many groups (default 10)."}},
+          ["group_column"]),
+        f("company_stats",
+          "Company-wide risk statistics: mean, median, std, percentiles, and risk-tier breakdown.",
+          {}),
+        f("find_employees",
+          "Filter employees by risk %, department and tenure range; returns a ranked list.",
+          {"min_risk_pct": {"type": "number"}, "max_risk_pct": {"type": "number"},
+           "department": {"type": "string", "description": "Empty for no department filter."},
+           "min_tenure_months": {"type": "number", "description": "Use -1 to skip."},
+           "max_tenure_months": {"type": "number", "description": "Use -1 to skip."},
+           "top_n": {"type": "integer"}}),
+        f("what_if",
+          "Simulate how % changes to salary, workload or sick days change an employee's turnover risk.",
+          {"employee_id": {"type": "string"},
+           "salary_delta_pct": {"type": "number"},
+           "workload_delta_pct": {"type": "number"},
+           "illness_delta_pct": {"type": "number"}},
+          ["employee_id"]),
+        f("run_sql",
+          "Run a read-only SQLite SELECT against table `turnover_data` (predictions). SELECT only.",
+          {"query": {"type": "string", "description": "A single SELECT query."}},
+          ["query"]),
+    ]
+
+
+def _run_openai_agent(
+    api_key: str,
+    callables: dict[str, Any],
+    system_prompt: str,
+    context_block: str,
+    history: list,
+    user_message: str,
+    model: str | None = None,
+) -> str:
+    """Run an OpenAI chat-completions tool-calling loop using the same tool implementations."""
+    try:
+        from openai import OpenAI
+    except Exception:
+        return "The 'openai' package is not installed. Run: pip install openai"
+
+    model = model or os.getenv("OPENAI_CHAT_MODEL", "gpt-4o-mini")
+    client = OpenAI(api_key=api_key)
+
+    messages: list[dict[str, Any]] = [
+        {"role": "system", "content": f"{system_prompt}\n\n{context_block}"}
+    ]
+    for item in (history or [])[-10:]:
+        role = str(item.get("role", "")).strip()
+        content = str(item.get("content", "")).strip()
+        if role in ("user", "assistant") and content:
+            messages.append({"role": role, "content": content})
+    messages.append({"role": "user", "content": user_message})
+
+    tools = _openai_tool_schemas()
+
+    try:
+        for _ in range(6):
+            response = client.chat.completions.create(
+                model=model,
+                messages=messages,
+                tools=tools,
+                tool_choice="auto",
+                temperature=0.2,
+            )
+            msg = response.choices[0].message
+            if not getattr(msg, "tool_calls", None):
+                return (msg.content or "").strip() or "I wasn't able to produce an answer for that."
+
+            messages.append({
+                "role": "assistant",
+                "content": msg.content or "",
+                "tool_calls": [
+                    {
+                        "id": tc.id,
+                        "type": "function",
+                        "function": {"name": tc.function.name, "arguments": tc.function.arguments},
+                    }
+                    for tc in msg.tool_calls
+                ],
+            })
+
+            for tc in msg.tool_calls:
+                name = tc.function.name
+                try:
+                    args = json.loads(tc.function.arguments or "{}")
+                except Exception:
+                    args = {}
+                fn = callables.get(name)
+                try:
+                    result = fn(**args) if fn else f"Unknown tool: {name}"
+                except Exception as exc:
+                    result = f"Tool '{name}' failed: {exc}"
+                messages.append({"role": "tool", "tool_call_id": tc.id, "content": str(result)})
+
+        # Tool budget exhausted — ask for a final answer without more tools.
+        final = client.chat.completions.create(model=model, messages=messages, temperature=0.2)
+        return (final.choices[0].message.content or "").strip() or "I couldn't complete that request."
+    except Exception as exc:
+        return f"Assistant error (OpenAI): {exc}"
+
+
+# ---------------------------------------------------------------------------
 # Main Chat Function
 # ---------------------------------------------------------------------------
 
@@ -761,11 +956,13 @@ def chat(
     Returns:
         The assistant's response string.
     """
-    api_key = os.getenv("GEMINI_API_KEY") or os.getenv("gimini_api_key") or os.getenv("GIMINI_API_KEY")
-    if not api_key:
-        return "No Gemini API key found. Add GEMINI_API_KEY (or gimini_api_key) to your .env file."
+    gemini_key, openai_key = _resolve_provider_keys()
+    if not gemini_key and not openai_key:
+        return (
+            "No API key found. Add GEMINI_API_KEY (preferred) or an OpenAI key "
+            "(OPENAI_API_KEY / OPEN_AI_API_KEY / OPEN_AI_KEY) to your .env file."
+        )
 
-    client = genai.Client(api_key=api_key)
     context_block = build_context(dashboard_df, selected_employee_id, selected_dept)
 
     emp_id_col = getattr(api, "employee_id_col", "fictive_employee") if api is not None else "fictive_employee"
@@ -873,6 +1070,7 @@ def chat(
         rank_departments, risk_by_group, company_stats, find_employees,
         what_if, run_sql,
     ]
+    callables = {fn.__name__: fn for fn in tools}
 
     history_lines: list[str] = []
     for item in history:
@@ -882,26 +1080,33 @@ def chat(
             history_lines.append(f"{role}: {content}")
     transcript = "\n".join(history_lines[-10:])
 
-    contents = (
-        f"{context_block}\n\n"
-        + (f"Conversation history:\n{transcript}\n\n" if transcript else "")
-        + f"Latest user message:\n{user_message}"
-    )
-
-    try:
-        response = client.models.generate_content(
-            model="gemini-2.5-flash",
-            contents=contents,
-            config=types.GenerateContentConfig(
-                system_instruction=SYSTEM_PROMPT,
-                tools=tools,
-                temperature=0.2,
-            ),
+    # ---- Provider 1: Gemini (preferred) ----
+    if gemini_key:
+        contents = (
+            f"{context_block}\n\n"
+            + (f"Conversation history:\n{transcript}\n\n" if transcript else "")
+            + f"Latest user message:\n{user_message}"
         )
-    except Exception as e:
-        return f"Assistant error: {e}"
+        try:
+            client = genai.Client(api_key=gemini_key)
+            response = client.models.generate_content(
+                model=os.getenv("GEMINI_CHAT_MODEL", "gemini-2.5-flash"),
+                contents=contents,
+                config=types.GenerateContentConfig(
+                    system_instruction=SYSTEM_PROMPT,
+                    tools=tools,
+                    temperature=0.2,
+                ),
+            )
+        except Exception as e:
+            return f"Assistant error (Gemini): {e}"
 
-    answer_text = (getattr(response, "text", "") or "").strip()
-    if not answer_text:
-        return "I wasn't able to produce an answer for that. Try rephrasing or asking about a specific employee, department, or driver."
-    return answer_text
+        answer_text = (getattr(response, "text", "") or "").strip()
+        if not answer_text:
+            return "I wasn't able to produce an answer for that. Try rephrasing or asking about a specific employee, department, or driver."
+        return answer_text
+
+    # ---- Provider 2: OpenAI (fallback) ----
+    return _run_openai_agent(
+        openai_key, callables, SYSTEM_PROMPT, context_block, history, user_message
+    )

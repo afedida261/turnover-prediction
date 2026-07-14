@@ -13,5 +13,6 @@ streamlit
 plotly
 joblib
 google-genai
+openai
 python-dotenv
 shap

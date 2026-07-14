@@ -157,8 +157,14 @@ st.markdown("""
         bottom: 96px !important;
         top: auto !important;
         transform: none !important;
-        width: min(92vw, 480px) !important;
-        max-height: 85vh !important;
+        width: 480px;
+        height: 560px;
+        min-width: 320px !important;
+        min-height: 280px !important;
+        max-width: 96vw !important;
+        max-height: 90vh !important;
+        resize: both !important;
+        overflow: auto !important;
         border-radius: 14px !important;
         border: 1px solid #e2e8f0 !important;
         box-shadow: 0 16px 36px rgba(15, 23, 42, 0.15) !important;
@@ -372,6 +378,7 @@ def render_floating_chat_widget(dashboard_df: pd.DataFrame, raw_df: pd.DataFrame
 
     with st.popover("💬", help="Open HR Assistant"):
         st.markdown("#### 💬 HR Assistant")
+        st.caption("Tip: drag the bottom-right corner of this window to resize it.")
 
         # Editable scope row
         sc1, sc2 = st.columns(2)
