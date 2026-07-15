@@ -753,6 +753,12 @@ def run_sql_query(dashboard_df: pd.DataFrame, query: str) -> str:
         return "Rejected: the query contains a non-read-only statement."
 
     df_for_sql = dashboard_df.copy()
+    # SQLite column identifiers are case-insensitive, while pandas column
+    # labels are not. Dashboard aliases can therefore produce pairs such as
+    # ``age`` and ``Age`` that pandas accepts but ``to_sql`` rejects. Keep the
+    # first occurrence; either spelling remains queryable in SQLite.
+    sqlite_column_keys = pd.Index(str(col).casefold() for col in df_for_sql.columns)
+    df_for_sql = df_for_sql.loc[:, ~sqlite_column_keys.duplicated()].copy()
     for col in df_for_sql.columns:
         df_for_sql[col] = df_for_sql[col].map(lambda x: x.item() if hasattr(x, "item") else x)
 

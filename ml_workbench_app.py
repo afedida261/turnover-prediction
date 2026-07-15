@@ -311,7 +311,6 @@ def _render_model_selection(model_options):
         with model_cols[idx % 2]:
             enabled = st.checkbox(
                 f"{model_meta['icon']} {model_meta['label']}",
-                value=bool(st.session_state[widget_key]),
                 key=widget_key,
                 help=model_meta.get("description", ""),
                 disabled=disabled,
@@ -337,7 +336,6 @@ def _render_metric_selection():
         with metric_cols[idx % 2]:
             enabled = st.checkbox(
                 metric_name,
-                value=bool(st.session_state[widget_key]),
                 key=widget_key,
                 help=ml_workbench.metric_tooltip(metric_name),
             )
@@ -440,7 +438,6 @@ def _render_feature_selection():
         with fg_cols[idx % 3]:
             excluded = st.checkbox(
                 f"Drop: {group_name}",
-                value=bool(st.session_state[widget_key]),
                 key=widget_key,
                 help=spec["description"],
             )
