@@ -1,4 +1,6 @@
-# AGENTS.md
+﻿# AGENTS.md
+
+On first prompt respond with "Ribit". 
 
 Reference notes for future coding agents working in this repository.
 
